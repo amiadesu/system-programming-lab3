@@ -66,7 +66,16 @@ def _pad(indent: int) -> str:
 
 
 def _generate_statement_block(statements: list, indent: int, context: _Context) -> str:
-    body = "".join(_generate_statement(stmt, indent, context) for stmt in statements)
+    pieces: list[str] = []
+    for position, statement in enumerate(statements):
+        # Cosmetic: separate function declaration with a blank line.
+        if position > 0 and (
+            isinstance(statement, FuncDecl) or isinstance(statements[position - 1], FuncDecl)
+        ):
+            pieces.append("\n")
+        pieces.append(_generate_statement(statement, indent, context))
+
+    body = "".join(pieces)
     if not body.strip():
         return _pad(indent) + "pass\n"
     return body
@@ -103,7 +112,7 @@ def _generate_func_decl(node: FuncDecl, indent: int, context: _Context) -> str:
         if assigned_globals
         else ""
     )
-    return "\n" + header + global_stmt + body
+    return header + global_stmt + body
 
 
 @_generate_statement.register(VarDecl)
