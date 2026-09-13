@@ -13,7 +13,7 @@ precedence = (
     ("left", "EQ", "NEQ"),
     ("left", "<", ">", "LEQ", "GEQ"),
     ("left", "+", "-"),
-    ("left", "*", "/"),
+    ("left", "*", "/", "%"),
     ("right", "UMINUS"),
 )
 
@@ -187,7 +187,8 @@ def p_expression_binop(p):
                    | expression '+' expression
                    | expression '-' expression
                    | expression '*' expression
-                   | expression '/' expression"""
+                   | expression '/' expression
+                   | expression '%' expression"""
     p[0] = BinOp(p[2], p[1], p[3])
 
 
