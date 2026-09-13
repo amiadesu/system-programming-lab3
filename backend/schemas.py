@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CompileRequest(BaseModel):
@@ -8,15 +8,18 @@ class CompileRequest(BaseModel):
 class AstNode(BaseModel):
     type: str
     label: str | None = None
-    children: list["AstNode"] = []
+    role: str | None = None
+    children: list["AstNode"] = Field(default_factory=list)
 
 
 class CompileResponse(BaseModel):
     ast: AstNode
     python_code: str
+    codegen_error: str | None = None
     execution_output: str
     execution_error: str | None = None
 
 
-class CompileErrorResponse(BaseModel):
-    message: str
+class Example(BaseModel):
+    name: str
+    source_code: str
