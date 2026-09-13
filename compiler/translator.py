@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from parser import parse_source
+from semantic_analysis import analyse
 from name_resolution import resolve_names
 from codegen import generate_python
 from interpreter import Interpreter
@@ -14,12 +15,14 @@ class TranslationResult:
     ast: dict | None
     python_code: str
     codegen_error: str | None
+    warnings: list[str]
     execution_output: str
     execution_error: str | None
 
 
 def translate(source_code: str) -> TranslationResult:
     ast = parse_source(source_code)
+    analysis = analyse(ast)
     resolution = resolve_names(ast)
     python_code = generate_python(ast, resolution)
 
@@ -42,6 +45,7 @@ def translate(source_code: str) -> TranslationResult:
         ast=ast_to_dict(ast),
         python_code=python_code,
         codegen_error=codegen_error,
+        warnings=analysis.warnings,
         execution_output=execution_output,
         execution_error=execution_error,
     )

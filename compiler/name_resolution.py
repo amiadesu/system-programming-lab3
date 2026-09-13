@@ -229,6 +229,16 @@ def _assign_python_names(binder: _Binder, module_names: dict[str, str], resoluti
 def _bind_global_initializer(
     node, global_names: set[str], module_names: dict[str, str], resolution: NameResolution
 ) -> None:
+    if isinstance(node, Call):
+        # Module-level statements run top to bottom in the generated Python, so
+        # an initializer calling a function declared further down would hit a
+        # NameError, while the interpreter - which builds its function table
+        # first - would happily run it. Forbidding the call keeps the two in
+        # step regardless of declaration order.
+        raise SemanticError(
+            "Ініціалізатор глобальної змінної не може викликати функції "
+            f"(виклик '{node.name}')"
+        )
     if isinstance(node, (Id, Assign)):
         if node.name not in global_names:
             raise SemanticError(
