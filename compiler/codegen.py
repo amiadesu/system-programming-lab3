@@ -33,7 +33,7 @@ PREC_DEFAULT_MINIMUM = PREC_COMPARISON
 PREC_INSIDE_PARENTHESES = PREC_WALRUS # absolute minimum precedence
 
 PREAMBLE = (
-    "import math\n"
+    "import math\n\n"
 )
 
 
