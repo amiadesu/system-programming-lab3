@@ -16,6 +16,7 @@ class CompileResponse(BaseModel):
     ast: AstNode
     python_code: str
     codegen_error: str | None = None
+    warnings: list[str] = Field(default_factory=list)
     execution_output: str
     execution_error: str | None = None
 

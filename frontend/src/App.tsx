@@ -101,6 +101,7 @@ export default function App() {
           <PythonOutput
             pythonCode={result?.pythonCode ?? ""}
             codegenError={result?.codegenError ?? null}
+            warnings={result?.warnings ?? []}
             executionOutput={result?.executionOutput ?? ""}
             executionError={result?.executionError ?? null}
           />

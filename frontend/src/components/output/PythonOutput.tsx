@@ -3,6 +3,7 @@ import "./PythonOutput.css";
 interface PythonOutputProps {
   pythonCode: string;
   codegenError: string | null;
+  warnings: string[];
   executionOutput: string;
   executionError: string | null;
 }
@@ -10,6 +11,7 @@ interface PythonOutputProps {
 export default function PythonOutput({
   pythonCode,
   codegenError,
+  warnings,
   executionOutput,
   executionError,
 }: PythonOutputProps) {
@@ -17,7 +19,12 @@ export default function PythonOutput({
     <div className="python-output">
       <section className="python-output-section">
         <h2 className="python-output-heading">Згенерований Python</h2>
-        {codegenError && <div className="python-output-warning">{codegenError}</div>}
+        {codegenError && <div className="python-output-error">{codegenError}</div>}
+        {warnings.map((warning) => (
+          <div key={warning} className="python-output-notice">
+            {warning}
+          </div>
+        ))}
         <pre className="python-output-code">
           <code>{pythonCode || "# код з'явиться тут після компіляції"}</code>
         </pre>

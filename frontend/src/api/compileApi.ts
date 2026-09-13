@@ -8,6 +8,7 @@ interface CompileResponseBody {
   ast: CompileResult["ast"];
   python_code: string;
   codegen_error: string | null;
+  warnings: string[];
   execution_output: string;
   execution_error: string | null;
 }
@@ -34,6 +35,7 @@ export async function compileSource(sourceCode: string): Promise<CompileResult> 
     ast: body.ast,
     pythonCode: body.python_code,
     codegenError: body.codegen_error,
+    warnings: body.warnings ?? [],
     executionOutput: body.execution_output,
     executionError: body.execution_error,
   };
