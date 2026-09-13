@@ -3,35 +3,49 @@ AST to JSON serialization.
 """
 import dataclasses
 
-from ast_nodes import Const, Id
+from ast_nodes import (
+    Assign, BinOp, Call, Const, FuncDecl, Group, Id, Param, UnaryOp, VarDecl,
+)
 
 
 def _node_label(node) -> str | None:
     if isinstance(node, Const):
         return str(node.value)
-    if hasattr(node, "name"):
+    if isinstance(node, (VarDecl, Param)):
+        return f"{node.type} {node.name}"
+    if isinstance(node, FuncDecl):
+        return f"{node.return_type} {node.name}"
+    if isinstance(node, (Id, Assign, Call)):
         return node.name
-    if hasattr(node, "operator"):
+    if isinstance(node, (BinOp, UnaryOp)):
         return node.operator
+    if isinstance(node, Group):
+        return "( )"
     return None
 
 
-def _child_nodes(node) -> list:
-    children = []
+def _child_nodes(node) -> list[tuple[str, object]]:
+    """Returns (role, child) pairs in declaration order."""
+    children: list[tuple[str, object]] = []
     for field in dataclasses.fields(node):
         value = getattr(node, field.name)
         if isinstance(value, list):
-            children.extend(item for item in value if dataclasses.is_dataclass(item))
+            for item in value:
+                if dataclasses.is_dataclass(item):
+                    children.append((field.name, item))
         elif dataclasses.is_dataclass(value):
-            children.append(value)
+            children.append((field.name, value))
     return children
 
 
-def ast_to_dict(node) -> dict | None:
+def ast_to_dict(node, role: str | None = None) -> dict | None:
     if node is None:
         return None
     return {
         "type": type(node).__name__,
         "label": _node_label(node),
-        "children": [ast_to_dict(child) for child in _child_nodes(node)],
+        "role": role,
+        "children": [
+            ast_to_dict(child, child_role) for child_role, child in _child_nodes(node)
+        ],
     }
