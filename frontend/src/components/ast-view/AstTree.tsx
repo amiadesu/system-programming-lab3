@@ -7,9 +7,9 @@ interface AstTreeProps {
   root: AstNode | null;
 }
 
-const NODE_HORIZONTAL_SPACING = 90;
-const NODE_VERTICAL_SPACING = 46;
-const MARGIN = { top: 24, right: 24, bottom: 24, left: 24 };
+const NODE_HORIZONTAL_SPACING = 118;
+const NODE_VERTICAL_SPACING = 68;
+const MARGIN = { top: 32, right: 24, bottom: 24, left: 24 };
 
 export default function AstTree({ root }: AstTreeProps) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -29,9 +29,9 @@ export default function AstTree({ root }: AstTreeProps) {
     const layoutRoot = treeLayout(hierarchyRoot);
 
     const nodes = layoutRoot.descendants();
-    const minX = Math.min(...nodes.map((node) => node.x));
-    const maxX = Math.max(...nodes.map((node) => node.x));
-    const maxY = Math.max(...nodes.map((node) => node.y));
+    const minX = d3.min(nodes, (node) => node.x) ?? 0;
+    const maxX = d3.max(nodes, (node) => node.x) ?? 0;
+    const maxY = d3.max(nodes, (node) => node.y) ?? 0;
 
     const width = maxX - minX + MARGIN.left + MARGIN.right;
     const height = maxY + MARGIN.top + MARGIN.bottom + NODE_VERTICAL_SPACING;
@@ -63,6 +63,14 @@ export default function AstTree({ root }: AstTreeProps) {
       .attr("transform", (node) => `translate(${node.x}, ${node.y})`);
 
     nodeGroups.append("circle").attr("r", 5);
+
+    nodeGroups
+      .filter((node) => node.data.role !== null)
+      .append("text")
+      .attr("class", "ast-node-role")
+      .attr("dy", -22)
+      .attr("text-anchor", "middle")
+      .text((node) => node.data.role as string);
 
     nodeGroups
       .append("text")

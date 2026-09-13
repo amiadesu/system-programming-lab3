@@ -40,3 +40,10 @@
   font-family: var(--font-mono);
   font-size: 10px;
 }
+
+.ast-node-role {
+  fill: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  opacity: 0.75;
+}
