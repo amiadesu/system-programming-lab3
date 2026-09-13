@@ -1,6 +1,7 @@
 import ply.yacc as yacc
 
 from lexer import tokens, build_lexer
+from errors import SemanticError, SyntaxErrorAtLine
 from ast_nodes import (
     Group, Program, VarDecl, Param, FuncDecl, Block, If, While, Return, Print,
     ExprStmt, Assign, BinOp, UnaryOp, Call, Id, Const,
@@ -16,6 +17,14 @@ precedence = (
     ("left", "*", "/", "%"),
     ("right", "UMINUS"),
 )
+
+
+def _reject_void_object(type_name: str, object_name: str, line: int) -> None:
+    """`void` is a valid type specifier but not a valid type for storage."""
+    if type_name == "void":
+        raise SemanticError(
+            f"Рядок {line}: змінна '{object_name}' не може мати тип void"
+        )
 
 
 def p_program(p):
@@ -42,17 +51,21 @@ def p_declaration(p):
 def p_var_declaration(p):
     """var_declaration : INT IDENTIFIER ';'
                         | VOID IDENTIFIER ';'"""
-    p[0] = VarDecl(p[2])
-    
+    _reject_void_object(p[1], p[2], p.lineno(2))
+    p[0] = VarDecl(p[1], p[2])
+
+
 def p_var_declaration_init(p):
     """var_declaration : INT IDENTIFIER '=' expression ';'
                        | VOID IDENTIFIER '=' expression ';'"""
-    p[0] = VarDecl(p[2], p[4])
+    _reject_void_object(p[1], p[2], p.lineno(2))
+    p[0] = VarDecl(p[1], p[2], p[4])
+
 
 def p_fun_declaration(p):
     """fun_declaration : INT IDENTIFIER '(' params ')' compound_stmt
                         | VOID IDENTIFIER '(' params ')' compound_stmt"""
-    p[0] = FuncDecl(p[2], p[4], p[6])
+    p[0] = FuncDecl(p[1], p[2], p[4], p[6])
 
 
 def p_params_empty(p):
@@ -83,7 +96,8 @@ def p_param_list_multi(p):
 def p_param(p):
     """param : INT IDENTIFIER
               | VOID IDENTIFIER"""
-    p[0] = Param(p[2])
+    _reject_void_object(p[1], p[2], p.lineno(2))
+    p[0] = Param(p[1], p[2])
 
 
 def p_compound_stmt(p):
@@ -239,8 +253,10 @@ def p_arg_list_multi(p):
 
 def p_error(p):
     if p is None:
-        raise SyntaxError("Unexpected end of input")
-    raise SyntaxError(f"Syntax error at line {p.lineno}: unexpected {p.value!r}")
+        raise SyntaxErrorAtLine("Неочікуваний кінець вхідного тексту")
+    raise SyntaxErrorAtLine(
+        f"Рядок {p.lineno}: синтаксична помилка біля {p.value!r}"
+    )
 
 
 _lexer = build_lexer()
