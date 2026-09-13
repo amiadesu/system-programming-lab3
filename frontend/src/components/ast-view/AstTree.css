@@ -1,0 +1,42 @@
+.ast-tree {
+  height: 100%;
+  overflow: auto;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+}
+
+.ast-tree--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 0 24px;
+}
+
+.ast-link {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-width: 1.5px;
+}
+
+.ast-node circle {
+  fill: var(--color-panel);
+  stroke: var(--color-accent);
+  stroke-width: 1.5px;
+}
+
+.ast-node-type {
+  fill: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.ast-node-label {
+  fill: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
