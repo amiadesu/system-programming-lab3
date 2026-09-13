@@ -79,3 +79,40 @@
     min-height: 320px;
   }
 }
+
+.app-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.app-examples {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-examples-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.app-example-button {
+  background: var(--color-panel-raised);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.app-example-button:hover:not(:disabled) {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+}
+
+.app-example-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
