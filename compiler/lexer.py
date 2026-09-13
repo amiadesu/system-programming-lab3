@@ -1,5 +1,7 @@
 import ply.lex as lex
 
+from errors import LexicalError
+
 reserved_words = {
     "int": "INT",
     "void": "VOID",
@@ -23,7 +25,23 @@ t_NEQ = r"!="
 t_LEQ = r"<="
 t_GEQ = r">="
 
-t_ignore = " \t\r"
+t_ignore = " \t\r\f\v"
+
+
+def t_block_comment(t):
+    r"/\*(.|\n)*?\*/"
+    t.lexer.lineno += t.value.count("\n")
+    pass # ignored, no token produced
+
+
+def t_line_comment(t):
+    r"//[^\n]*"
+    pass  # ignored, no token produced
+
+
+def t_unterminated_block_comment(t):
+    r"/\*"
+    raise LexicalError(f"Незакритий коментар /* починаючи з рядка {t.lexer.lineno}")
 
 
 def t_IDENTIFIER(t):
@@ -38,18 +56,15 @@ def t_INTEGER_CONST(t):
     return t
 
 
-def t_line_comment(t):
-    r"//.*"
-    pass  # ignored, no token produced
-
-
 def t_newline(t):
     r"\n+"
     t.lexer.lineno += len(t.value)
 
 
 def t_error(t):
-    raise SyntaxError(f"Unexpected character {t.value[0]!r} at line {t.lexer.lineno}")
+    raise LexicalError(
+        f"Рядок {t.lexer.lineno}: неочікуваний символ {t.value[0]!r}"
+    )
 
 
 def build_lexer():
