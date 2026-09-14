@@ -10,8 +10,17 @@ from ast_nodes import (
     Continue, Return, Print, ExprStmt, Assign, CompoundAssign, IncDec, BinOp,
     LogicalOp, UnaryOp, Ternary, Call, Id, Const, StringConst,
 )
-from constants import ArrayType, ValueType, CType, DOUBLE_OUTPUT_PRECISION, ENTRY_POINT, MAX_CALL_DEPTH, MAX_STEPS
+from constants import (
+    ArrayType, ValueType, CType, DOUBLE_OUTPUT_PRECISION, ENTRY_POINT, MAX_CALL_DEPTH, MAX_STEPS,
+    INT32_MIN, INT32_MAX,
+)
 from errors import error_prefix, ExecutionLimitExceeded, RuntimeErrorInProgram, SemanticError
+
+def to_int32(value: int | float) -> int:
+    """Imitates C's 32-bit signed integer overflow behavior."""
+    val = int(value)
+    int32_range = INT32_MAX - INT32_MIN + 1
+    return ((val - INT32_MIN) % int32_range) + INT32_MIN
 
 # Each interpreted C call costs several Python frames, so the default limit of
 # 1000 would be hit long before MAX_CALL_DEPTH.
@@ -35,7 +44,7 @@ def convert(value: Value, type_name: ValueType) -> Value:
         raise RuntimeErrorInProgram("масив не можна перетворити на число")
     if type_name == CType.DOUBLE:
         return float(value)
-    return int(value)  # int() truncates toward zero, as C does
+    return to_int32(value)  # int() truncates toward zero, as C does
 
 
 def new_array(array_type: ArrayType) -> list:
@@ -112,19 +121,18 @@ def c_divide(left, right):
     if isinstance(left, float) or isinstance(right, float):
         return left / right
     quotient = abs(left) // abs(right)
-    return quotient if (left < 0) == (right < 0) else -quotient
+    return to_int32(quotient) if (left < 0) == (right < 0) else to_int32(-quotient)
 
 
 def c_modulo(left: int, right: int) -> int:
     if right == 0:
         raise RuntimeErrorInProgram("Ділення на нуль (операція %)")
-    return left - c_divide(left, right) * right # type: ignore
-
+    return to_int32(left - c_divide(left, right) * right)
 
 BINARY_OPERATORS = {
-    "+": lambda a, b: a + b,
-    "-": lambda a, b: a - b,
-    "*": lambda a, b: a * b,
+    "+": lambda a, b: to_int32(a + b) if isinstance(a, int) and isinstance(b, int) else a + b,
+    "-": lambda a, b: to_int32(a - b) if isinstance(a, int) and isinstance(b, int) else a - b,
+    "*": lambda a, b: to_int32(a * b) if isinstance(a, int) and isinstance(b, int) else a * b,
     "/": c_divide,
     "%": c_modulo,
     "==": lambda a, b: int(a == b),
@@ -133,17 +141,17 @@ BINARY_OPERATORS = {
     ">": lambda a, b: int(a > b),
     "<=": lambda a, b: int(a <= b),
     ">=": lambda a, b: int(a >= b),
-    "&": lambda a, b: a & b,
-    "|": lambda a, b: a | b,
-    "^": lambda a, b: a ^ b,
-    "<<": lambda a, b: a << b,
-    ">>": lambda a, b: a >> b,
+    "&": lambda a, b: to_int32(a & b),
+    "|": lambda a, b: to_int32(a | b),
+    "^": lambda a, b: to_int32(a ^ b),
+    "<<": lambda a, b: to_int32(a << b),
+    ">>": lambda a, b: to_int32(a >> b),
 }
 
 UNARY_OPERATORS = {
-    "-": lambda a: -a,
+    "-": lambda a: to_int32(-a) if isinstance(a, int) else -a,
     "!": lambda a: int(not a),
-    "~": lambda a: ~a,
+    "~": lambda a: to_int32(~a) if isinstance(a, int) else ~a,
 }
 
 
