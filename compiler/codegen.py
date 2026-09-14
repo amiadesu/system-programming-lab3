@@ -4,11 +4,13 @@ Translation of the AST into Python source text.
 from functools import singledispatch
 
 from ast_nodes import (
-    Group, Program, VarDecl, FuncDecl, Block, If, While, For, DoWhile, Break,
-    Continue, Return, Print, ExprStmt, Assign, CompoundAssign, IncDec, BinOp,
-    LogicalOp, UnaryOp, Ternary, Call, Id, Const,
+    Group, Program, VarDecl, FuncDecl, FuncProto, Block, If, While, For,
+    DoWhile, Break, Continue, Return, Print, ExprStmt, Assign, CompoundAssign,
+    IncDec, BinOp, LogicalOp, UnaryOp, Ternary, Call, Id, Const, StringConst,
 )
 from name_resolution import NameResolution, resolve_names
+from type_inference import DOUBLE, INT, TypeInformation, infer_types
+from interpreter import DOUBLE_OUTPUT_PRECISION
 
 INDENT_UNIT = "    "
 
@@ -62,9 +64,14 @@ PREAMBLE = (
 )
 
 
-def generate_python(program: Program, resolution: NameResolution | None = None) -> str:
+def generate_python(
+    program: Program,
+    resolution: NameResolution | None = None,
+    types: TypeInformation | None = None,
+) -> str:
     resolution = resolution if resolution is not None else resolve_names(program)
-    context = _Context(resolution)
+    types = types if types is not None else infer_types(program, resolution)
+    context = _Context(resolution, types, program)
     body = _generate_statement(program, 0, context)
     preamble = PREAMBLE if context.uses_math else ""
     return preamble + body
@@ -74,8 +81,15 @@ class _Context:
     """Per-translation state: replaces the module-level globals of the old
     implementation so two translations can never interfere."""
 
-    def __init__(self, resolution: NameResolution):
+    def __init__(self, resolution: NameResolution, types: TypeInformation, program: Program):
         self.resolution = resolution
+        self.types = types
+        self.functions = {
+            declaration.name: declaration
+            for declaration in program.declarations
+            if isinstance(declaration, FuncDecl)
+        }
+        self.current_return_type = INT
         self.uses_math = False
         self.current_function: str | None = None
         self.continue_prelude: list = []
@@ -85,6 +99,9 @@ class _Context:
 
     def name_of_function(self, c_name: str) -> str:
         return self.resolution.name_of_function(c_name)
+
+    def type_of(self, node) -> str:
+        return self.types.type_of(node)
 
 
 def _pad(indent: int) -> str:
@@ -128,9 +145,12 @@ def _generate_func_decl(node: FuncDecl, indent: int, context: _Context) -> str:
     header = f"{_pad(indent)}def {context.name_of_function(node.name)}({param_names}):\n"
 
     previous_function = context.current_function
+    previous_return_type = context.current_return_type
     context.current_function = node.name
+    context.current_return_type = node.return_type
     body = _generate_statement(node.body, indent + 1, context)
     context.current_function = previous_function
+    context.current_return_type = previous_return_type
 
     assigned_globals = context.resolution.assigned_globals.get(node.name, [])
     global_stmt = (
@@ -141,12 +161,18 @@ def _generate_func_decl(node: FuncDecl, indent: int, context: _Context) -> str:
     return header + global_stmt + body
 
 
+@_generate_statement.register(FuncProto)
+def _generate_func_proto(node: FuncProto, indent: int, context: _Context) -> str:
+    # A prototype only tells the compiler what to expect; Python needs nothing.
+    return ""
+
+
 @_generate_statement.register(VarDecl)
 def _generate_var_decl(node: VarDecl, indent: int, context: _Context) -> str:
     name = context.name_of(node)
     if node.value is not None:
-        return f"{_pad(indent)}{name} = {_int_normalised(node.value, context)}\n"
-    return f"{_pad(indent)}{name} = 0\n"
+        return f"{_pad(indent)}{name} = {_converted(node.value, node.type, context)}\n"
+    return f"{_pad(indent)}{name} = {'0.0' if node.type == DOUBLE else '0'}\n"
 
 
 @_generate_statement.register(If)
@@ -229,26 +255,33 @@ def _generate_continue(node: Continue, indent: int, context: _Context) -> str:
 def _generate_return(node: Return, indent: int, context: _Context) -> str:
     if node.value is None:
         return f"{_pad(indent)}return\n"
-    return f"{_pad(indent)}return {_int_normalised(node.value, context)}\n"
+    return f"{_pad(indent)}return {_converted(node.value, context.current_return_type, context)}\n"
 
 
 @_generate_statement.register(Print)
 def _generate_print(node: Print, indent: int, context: _Context) -> str:
+    if isinstance(node.value, StringConst):
+        return f"{_pad(indent)}print({node.value.value!r})\n"
+    if context.type_of(node.value) == DOUBLE:
+        rendered = _expression(node.value, PREC_INSIDE_PARENTHESES, context)
+        return f'{_pad(indent)}print(f"{{{rendered}:.{DOUBLE_OUTPUT_PRECISION}f}}")\n'
     return f"{_pad(indent)}print({_int_normalised(node.value, context)})\n"
 
 
 @_generate_statement.register(ExprStmt)
 def _generate_expr_stmt(node: ExprStmt, indent: int, context: _Context) -> str:
     inner = node.expression
-    
+
     if isinstance(inner, Assign):
         target = context.name_of(inner)
-        return f"{_pad(indent)}{target} = {_int_normalised(inner.value, context)}\n"
+        return f"{_pad(indent)}{target} = {_converted(inner.value, context.type_of(inner), context)}\n"
 
     if isinstance(inner, CompoundAssign):
         target = context.name_of(inner)
-        if inner.operator in ("/", "%"):
-            return f"{_pad(indent)}{target} = {_divide_or_modulo(inner.operator, target, inner.value, context)}\n"
+        target_type = context.type_of(inner)
+        combined = _compound_value(inner, target, target_type, context)
+        if combined is not None:
+            return f"{_pad(indent)}{target} = {combined}\n"
         value = _expression(inner.value, PREC_DEFAULT_MINIMUM, context)
         return f"{_pad(indent)}{target} {inner.operator}= {value}\n"
 
@@ -281,6 +314,27 @@ def _yields_bool(node) -> bool:
     return False
 
 
+def _converted(node, target_type: str, context: _Context) -> str:
+    """
+    Renders `node` for a slot of `target_type`, applying the C conversion.
+
+    Only narrowing needs code: a double put into an int truncates toward zero.
+    Widening the other way is free, because Python's `/` is already true
+    division and every other operator gives the same answer for an int as for
+    the double it stands for.
+    """
+    if target_type == INT and context.type_of(node) == DOUBLE:
+        context.uses_math = True
+        return f"math.trunc({_expression(node, PREC_INSIDE_PARENTHESES, context)})"
+    if target_type == INT:
+        return _int_normalised(node, context)
+    if context.type_of(node) == INT:
+        if isinstance(node, Const):
+            return repr(float(node.value))
+        return f"float({_expression(node, PREC_INSIDE_PARENTHESES, context)})"
+    return _expression(node, PREC_INSIDE_PARENTHESES, context)
+
+
 def _int_normalised(node, context: _Context) -> str:
     """
     Renders `node` so that the result is an `int` and never a `bool`.
@@ -298,14 +352,45 @@ def _bool_normalised(node, context: _Context) -> str:
     return f"bool({_expression(node, PREC_INSIDE_PARENTHESES, context)})"
 
 
-def _divide_or_modulo(operator: str, left: str, right_node, context: _Context) -> str:
-    """Shared rendering for `/` and `%`, which cannot use Python's operators."""
+def _divide_or_modulo(node: BinOp, left: str, context: _Context) -> str:
+    """
+    Renders `/` and `%`, neither of which maps onto a Python operator.
+    """
+    if node.operator == "/" and context.type_of(node) == DOUBLE:
+        right = _expression(node.right, PREC_UNARY, context)
+        return f"{left} / {right}"
+
     context.uses_math = True
-    if operator == "/":
-        right = _expression(right_node, PREC_UNARY, context)
+    if node.operator == "/":
+        right = _expression(node.right, PREC_UNARY, context)
         return f"math.trunc({left} / {right})"
-    right = _expression(right_node, PREC_DEFAULT_MINIMUM, context)
+    right = _expression(node.right, PREC_DEFAULT_MINIMUM, context)
     return f"int(math.fmod({left}, {right}))"
+
+
+def _compound_value(node: CompoundAssign, target: str, target_type: str, context: _Context) -> str | None:
+    value_type = context.type_of(node.value)
+    narrows = target_type == INT and value_type == DOUBLE
+
+    if node.operator in ("/", "%"):
+        right_minimum = PREC_UNARY if node.operator == "/" else PREC_DEFAULT_MINIMUM
+        right = _expression(node.value, right_minimum, context)
+        if node.operator == "/":
+            if target_type == DOUBLE or value_type == DOUBLE:
+                combined = f"{target} / {right}"
+                return f"math.trunc({combined})" if narrows else combined
+            context.uses_math = True
+            return f"math.trunc({target} / {right})"
+        context.uses_math = True
+        return f"int(math.fmod({target}, {right}))"
+
+    if narrows:
+        context.uses_math = True
+        _, right_level = BINARY_LEVELS[node.operator]
+        right = _expression(node.value, right_level, context)
+        return f"math.trunc({target} {node.operator} {right})"
+
+    return None
 
 
 def _expression(node, minimum_precedence: int, context: _Context) -> str:
@@ -331,7 +416,7 @@ def _generate_group_expr(node: Group, context: _Context) -> tuple[str, int]:
 @_generate_expression.register(Assign)
 def _generate_assign_expr(node: Assign, context: _Context) -> tuple[str, int]:
     target = context.name_of(node)
-    value = _int_normalised(node.value, context)
+    value = _converted(node.value, context.type_of(node), context)
     return f"{target} := {value}", PREC_WALRUS
 
 
@@ -340,7 +425,9 @@ def _generate_binop_expr(node: BinOp, context: _Context) -> tuple[str, int]:
     if node.operator in ("/", "%"):
         left_minimum = PREC_MULTIPLICATIVE if node.operator == "/" else PREC_DEFAULT_MINIMUM
         left = _expression(node.left, left_minimum, context)
-        return _divide_or_modulo(node.operator, left, node.right, context), PREC_ATOM
+        rendered = _divide_or_modulo(node, left, context)
+        level = PREC_MULTIPLICATIVE if rendered.startswith(f"{left} /") else PREC_ATOM
+        return rendered, level
 
     if node.operator in COMPARISON_OPERATORS:
         # Requiring one level above PREC_COMPARISON on both sides parenthesises
@@ -379,9 +466,9 @@ def _generate_ternary_expr(node: Ternary, context: _Context) -> tuple[str, int]:
 @_generate_expression.register(CompoundAssign)
 def _generate_compound_assign_expr(node: CompoundAssign, context: _Context) -> tuple[str, int]:
     target = context.name_of(node)
-    if node.operator in ("/", "%"):
-        value = _divide_or_modulo(node.operator, target, node.value, context)
-    else:
+    target_type = context.type_of(node)
+    value = _compound_value(node, target, target_type, context)
+    if value is None:
         _, right_level = BINARY_LEVELS[node.operator]
         value = f"{target} {node.operator} {_expression(node.value, right_level, context)}"
     return f"{target} := {value}", PREC_WALRUS
@@ -408,7 +495,12 @@ def _generate_unary_expr(node: UnaryOp, context: _Context) -> tuple[str, int]:
 
 @_generate_expression.register(Call)
 def _generate_call_expr(node: Call, context: _Context) -> tuple[str, int]:
-    args = ", ".join(_int_normalised(arg, context) for arg in node.arguments)
+    function = context.functions.get(node.name)
+    parameter_types = [param.type for param in function.params] if function else []
+    args = ", ".join(
+        _converted(argument, parameter_types[index] if index < len(parameter_types) else INT, context)
+        for index, argument in enumerate(node.arguments)
+    )
     return f"{context.name_of_function(node.name)}({args})", PREC_ATOM
 
 
@@ -419,4 +511,4 @@ def _generate_id_expr(node: Id, context: _Context) -> tuple[str, int]:
 
 @_generate_expression.register(Const)
 def _generate_const_expr(node: Const, context: _Context) -> tuple[str, int]:
-    return str(node.value), PREC_ATOM
+    return repr(node.value), PREC_ATOM

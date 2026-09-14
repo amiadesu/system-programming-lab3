@@ -7,7 +7,7 @@ from functools import singledispatch
 from ast_nodes import (
     Group, Program, VarDecl, FuncDecl, Block, If, While, For, DoWhile, Break,
     Continue, Return, Print, ExprStmt, Assign, CompoundAssign, IncDec, BinOp,
-    LogicalOp, UnaryOp, Ternary, Call, Id, Const,
+    LogicalOp, UnaryOp, Ternary, Call, Id, Const, StringConst,
 )
 from errors import ExecutionLimitExceeded, RuntimeErrorInProgram, SemanticError
 
@@ -20,9 +20,34 @@ MAX_CALL_DEPTH = 500
 sys.setrecursionlimit(20_000)
 
 
-def c_divide(left: int, right: int) -> int:
+# Digits after the point that `print` shows for a double, matching C's "%f".
+DOUBLE_OUTPUT_PRECISION = 6
+
+
+def convert(value, type_name: str):
+    """
+    Applies a C conversion to `value` on its way into a slot of `type_name`.
+    Assignment, parameter passing and `return` all convert: a double stored in
+    an int is truncated toward zero, an int stored in a double widens.
+    """
+    if type_name == "double":
+        return float(value)
+    return int(value)  # int() truncates toward zero, as C does
+
+
+def format_value(value) -> str:
+    """Renders a value the way `print` shows it."""
+    if isinstance(value, float):
+        return f"{value:.{DOUBLE_OUTPUT_PRECISION}f}"
+    return str(int(value))
+
+
+def c_divide(left, right):
+    """Truncating for two integers, ordinary division otherwise, as in C."""
     if right == 0:
         raise RuntimeErrorInProgram("Ділення на нуль")
+    if isinstance(left, float) or isinstance(right, float):
+        return left / right
     quotient = abs(left) // abs(right)
     return quotient if (left < 0) == (right < 0) else -quotient
 
@@ -30,7 +55,7 @@ def c_divide(left: int, right: int) -> int:
 def c_modulo(left: int, right: int) -> int:
     if right == 0:
         raise RuntimeErrorInProgram("Ділення на нуль (операція %)")
-    return left - c_divide(left, right) * right
+    return left - c_divide(left, right) * right # type: ignore
 
 
 BINARY_OPERATORS = {
@@ -78,26 +103,28 @@ class Scope:
     """One lexical scope: a function call frame or a `{ ... }` block."""
 
     def __init__(self, parent: "Scope | None" = None):
-        self.variables: dict[str, int] = {}
+        self.variables: dict[str, object] = {}
+        self.types: dict[str, str] = {}
         self.parent = parent
 
-    def declare(self, name: str, value: int) -> None:
+    def declare(self, name: str, value, type_name: str = "int") -> None:
         """Introduces `name` in *this* scope, shadowing any outer one."""
         if name in self.variables:
             raise SemanticError(f"Повторне оголошення змінної '{name}'")
-        self.variables[name] = value
+        self.types[name] = type_name
+        self.variables[name] = convert(value, type_name)
 
     def get(self, name: str) -> int:
         scope = self._find(name)
         if scope is None:
             raise RuntimeErrorInProgram(f"Використання неоголошеної змінної '{name}'")
-        return scope.variables[name]
+        return scope.variables[name] # type: ignore
 
-    def set(self, name: str, value: int) -> None:
+    def set(self, name: str, value) -> None:
         scope = self._find(name)
         if scope is None:
             raise RuntimeErrorInProgram(f"Присвоєння неоголошеній змінній '{name}'")
-        scope.variables[name] = value
+        scope.variables[name] = convert(value, scope.types.get(name, "int"))
 
     def _find(self, name: str) -> "Scope | None":
         scope: Scope | None = self
@@ -114,7 +141,7 @@ class Interpreter:
     program's own `print(...)` statements.
     """
 
-    def __init__(self, program: Program, max_steps: int = MAX_STEPS):
+    def __init__(self, program: Program, types=None, max_steps: int = MAX_STEPS):
         self._functions: dict[str, FuncDecl] = {}
         for declaration in program.declarations:
             if isinstance(declaration, FuncDecl):
@@ -122,6 +149,7 @@ class Interpreter:
                     raise SemanticError(f"Повторне оголошення функції '{declaration.name}'")
                 self._functions[declaration.name] = declaration
 
+        self._types = types
         self._global_scope = Scope()
         self.output_lines: list[str] = []
         self._steps = 0
@@ -132,6 +160,9 @@ class Interpreter:
         for declaration in program.declarations:
             if isinstance(declaration, VarDecl):
                 _execute_statement(declaration, self._global_scope, self)
+
+    def type_of(self, node) -> str:
+        return self._types.type_of(node) if self._types is not None else "int"
 
     def count_step(self) -> None:
         self._steps += 1
@@ -167,11 +198,11 @@ class Interpreter:
 
         scope = Scope(parent=self._global_scope)
         for param, value in zip(function.params, argument_values):
-            scope.declare(param.name, value)
+            scope.declare(param.name, value, param.type)
         try:
             _execute_statement(function.body, scope, self)
         except _ReturnSignal as signal:
-            return signal.value
+            return convert(signal.value, function.return_type) if function.return_type != "void" else 0 # type: ignore
         finally:
             self._depth -= 1
         return 0
@@ -193,7 +224,7 @@ def _execute_block(node: Block, scope: Scope, interpreter: Interpreter) -> None:
 @_execute_statement.register(VarDecl)
 def _execute_var_decl(node: VarDecl, scope: Scope, interpreter: Interpreter) -> None:
     value = _evaluate_expression(node.value, scope, interpreter) if node.value is not None else 0
-    scope.declare(node.name, value)
+    scope.declare(node.name, value, node.type)
 
 
 @_execute_statement.register(ExprStmt)
@@ -203,8 +234,11 @@ def _execute_expr_stmt(node: ExprStmt, scope: Scope, interpreter: Interpreter) -
 
 @_execute_statement.register(Print)
 def _execute_print(node: Print, scope: Scope, interpreter: Interpreter) -> None:
+    if isinstance(node.value, StringConst):
+        interpreter.output_lines.append(node.value.value)
+        return
     value = _evaluate_expression(node.value, scope, interpreter)
-    interpreter.output_lines.append(str(int(value)))
+    interpreter.output_lines.append(format_value(value))
 
 
 @_execute_statement.register(If)
@@ -284,7 +318,7 @@ def _evaluate_expression(node, scope: Scope, interpreter: Interpreter) -> int:
 
 @_evaluate_expression.register(Const)
 def _evaluate_const(node: Const, scope: Scope, interpreter: Interpreter) -> int:
-    return node.value
+    return node.value # type: ignore
 
 
 @_evaluate_expression.register(Id)
@@ -337,12 +371,12 @@ def _evaluate_logical(node: LogicalOp, scope: Scope, interpreter: Interpreter) -
     return int(bool(_evaluate_expression(node.right, scope, interpreter)))
 
 
-@_evaluate_expression.register(Ternary)
-def _evaluate_ternary(node: Ternary, scope: Scope, interpreter: Interpreter) -> int:
+@_evaluate_expression.register(Ternary) # type: ignore
+def _evaluate_ternary(node: Ternary, scope: Scope, interpreter: Interpreter):
     interpreter.count_step()
-    if _evaluate_expression(node.condition, scope, interpreter):
-        return _evaluate_expression(node.if_true, scope, interpreter)
-    return _evaluate_expression(node.if_false, scope, interpreter)
+    branch = node.if_true if _evaluate_expression(node.condition, scope, interpreter) else node.if_false
+    value = _evaluate_expression(branch, scope, interpreter)
+    return convert(value, interpreter.type_of(node))
 
 
 @_evaluate_expression.register(CompoundAssign)
@@ -359,7 +393,7 @@ def _evaluate_inc_dec(node: IncDec, scope: Scope, interpreter: Interpreter) -> i
     previous = scope.get(node.name)
     value = previous + 1 if node.operator == "+" else previous - 1
     scope.set(node.name, value)
-    return value if node.is_prefix else previous
+    return scope.get(node.name) if node.is_prefix else previous
 
 
 @_evaluate_expression.register(Call)

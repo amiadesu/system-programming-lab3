@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from parser import parse_source
 from semantic_analysis import analyse
 from name_resolution import resolve_names
+from type_inference import infer_types
 from codegen import generate_python
 from interpreter import Interpreter
 from ast_serializer import ast_to_dict
@@ -24,7 +25,8 @@ def translate(source_code: str) -> TranslationResult:
     ast = parse_source(source_code)
     analysis = analyse(ast)
     resolution = resolve_names(ast)
-    python_code = generate_python(ast, resolution)
+    types = infer_types(ast, resolution)
+    python_code = generate_python(ast, resolution, types)
 
     codegen_error = None
     try:
@@ -35,7 +37,7 @@ def translate(source_code: str) -> TranslationResult:
     execution_output = ""
     execution_error = None
     try:
-        interpreter = Interpreter(ast)
+        interpreter = Interpreter(ast, types)
         interpreter.run()
         execution_output = "\n".join(interpreter.output_lines)
     except Exception as error:

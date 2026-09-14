@@ -23,8 +23,8 @@ from dataclasses import dataclass, field
 
 from ast_nodes import (
     Assign, BinOp, Block, Break, Call, CompoundAssign, Continue, DoWhile,
-    ExprStmt, For, FuncDecl, Group, Id, If, IncDec, LogicalOp, Print, Program,
-    Return, Ternary, UnaryOp, VarDecl, While,
+    ExprStmt, For, FuncDecl, FuncProto, Group, Id, If, IncDec, LogicalOp,
+    Print, Program, Return, StringConst, Ternary, UnaryOp, VarDecl, While,
 )
 from errors import SemanticError
 
@@ -61,6 +61,7 @@ class NameResolution:
     """
 
     python_name: dict[int, str] = field(default_factory=dict)
+    declaration_of: dict[int, object] = field(default_factory=dict)
     function_name: dict[str, str] = field(default_factory=dict)
     assigned_globals: dict[str, list[str]] = field(default_factory=dict)
     _kept_alive: list = field(default_factory=list)
@@ -71,9 +72,16 @@ class NameResolution:
     def name_of_function(self, c_name: str) -> str:
         return self.function_name.get(c_name, c_name)
 
+    def declaration_for(self, node):
+        return self.declaration_of.get(id(node))
+
     def _record(self, node, name: str) -> None:
         self.python_name[id(node)] = name
         self._kept_alive.append(node)
+
+    def _record_binding(self, node, declaration) -> None:
+        self.declaration_of[id(node)] = declaration
+        self._kept_alive.append(declaration)
 
 
 class _Binder:
@@ -84,8 +92,9 @@ class _Binder:
     with them.
     """
 
-    def __init__(self, global_names: set[str]):
+    def __init__(self, global_names: set[str], const_globals: dict[str, bool] | None = None):
         self.global_names = global_names
+        self.const_globals = const_globals or {}
         self.scopes: list[dict[str, object]] = []
         # occurrence node → (node, declaration it binds to; None == global)
         self.binding: dict[int, tuple] = {}
@@ -124,12 +133,16 @@ class _Binder:
         declaration = self.lookup(name)
         self.binding[id(node)] = (node, declaration)
         self.all_names.add(name)
+        if is_assignment and declaration is not None and getattr(declaration, "is_const", False):
+            raise SemanticError(f"{_at(node)}не можна змінювати константу '{name}'")
         if declaration is None:
             if name not in self.global_names:
                 raise SemanticError(
                     f"{_at(node)}використання неоголошеної змінної '{name}'"
                 )
             self.globals_used.add(name)
+            if is_assignment and self.const_globals.get(name):
+                raise SemanticError(f"{_at(node)}не можна змінювати константу '{name}'")
             if is_assignment and name not in self.assigned_globals:
                 self.assigned_globals.append(name)
 
@@ -137,6 +150,14 @@ class _Binder:
 def resolve_names(program: Program) -> NameResolution:
     resolution = NameResolution()
     global_names, module_names = _name_module_level(program, resolution)
+    global_declarations = {
+        declaration.name: declaration
+        for declaration in program.declarations
+        if isinstance(declaration, VarDecl)
+    }
+    const_globals = {
+        name: declaration.is_const for name, declaration in global_declarations.items()
+    }
 
     for declaration in program.declarations:
         if isinstance(declaration, VarDecl) and declaration.value is not None:
@@ -145,13 +166,13 @@ def resolve_names(program: Program) -> NameResolution:
     for declaration in program.declarations:
         if not isinstance(declaration, FuncDecl):
             continue
-        binder = _Binder(global_names)
+        binder = _Binder(global_names, const_globals)
         binder.push()
         for param in declaration.params:
             binder.declare(param, param.name, f"у параметрах функції '{declaration.name}'")
         _bind_block(declaration.body, binder, new_scope=False)
         binder.pop()
-        _assign_python_names(binder, module_names, resolution)
+        _assign_python_names(binder, module_names, global_declarations, resolution) #type: ignore
         resolution.assigned_globals[declaration.name] = [
             module_names[name] for name in binder.assigned_globals
         ]
@@ -168,9 +189,12 @@ def _name_module_level(program: Program, resolution: NameResolution) -> tuple[se
     global_names: set[str] = set()
     function_names: set[str] = set()
     module_names: dict[str, str] = {}
+    global_declarations: dict[str, VarDecl] = {}
     taken: set[str] = set()
 
     for declaration in program.declarations:
+        if isinstance(declaration, FuncProto):
+            continue  # a prototype introduces no name of its own
         name = declaration.name
         is_function = isinstance(declaration, FuncDecl)
 
@@ -194,12 +218,18 @@ def _name_module_level(program: Program, resolution: NameResolution) -> tuple[se
             resolution.function_name[name] = python_name
         else:
             global_names.add(name)
+            global_declarations[name] = declaration
             resolution._record(declaration, python_name)
 
     return global_names, module_names
 
 
-def _assign_python_names(binder: _Binder, module_names: dict[str, str], resolution: NameResolution) -> None:
+def _assign_python_names(
+    binder: _Binder,
+    module_names: dict[str, str],
+    global_declarations: dict[str, object],
+    resolution: NameResolution,
+) -> None:
     """
     Picks a Python identifier for every local declaration.
     """
@@ -235,8 +265,10 @@ def _assign_python_names(binder: _Binder, module_names: dict[str, str], resoluti
     for node, declaration in binder.binding.values():
         if declaration is None:
             resolution._record(node, module_names[node.name])
+            resolution._record_binding(node, global_declarations[node.name])
         else:
             resolution._record(node, resolution.python_name[id(declaration)])
+            resolution._record_binding(node, declaration)
 
 
 def _bind_global_initializer(
@@ -252,6 +284,8 @@ def _bind_global_initializer(
             f"{_at(node)}ініціалізатор глобальної змінної не може викликати "
             f"функції (виклик '{node.name}')"
         )
+    if isinstance(node, StringConst):
+        return
     if isinstance(node, (Id, Assign, CompoundAssign, IncDec)):
         if node.name not in global_names:
             raise SemanticError(

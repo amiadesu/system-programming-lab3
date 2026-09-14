@@ -7,6 +7,8 @@ the generated Python would otherwise quietly disagree:
 * a non-void function must return a value on every path, and a void one must
   not return a value at all;
 * `break` and `continue` may only appear inside a loop;
+* a prototype must be followed by a matching definition;
+* a `const` variable may not be assigned to after its declaration;
 * every call must name a declared function and pass the right number of
   arguments;
 * the result of a void function may not be used as a value;
@@ -22,8 +24,9 @@ from dataclasses import dataclass, field
 
 from ast_nodes import (
     Assign, BinOp, Block, Break, Call, CompoundAssign, Const, Continue,
-    DoWhile, ExprStmt, For, FuncDecl, Group, Id, If, IncDec, LogicalOp, Print,
-    Program, Return, Ternary, UnaryOp, VarDecl, While,
+    DoWhile, ExprStmt, For, FuncDecl, FuncProto, Group, Id, If, IncDec,
+    LogicalOp, Print, Program, Return, StringConst, Ternary, UnaryOp, VarDecl,
+    While,
 )
 from errors import SemanticError
 
@@ -50,7 +53,11 @@ def analyse(program: Program) -> AnalysisResult:
         if isinstance(declaration, FuncDecl)
     }
 
+    _check_prototypes(program, functions)
+
     for declaration in program.declarations:
+        if isinstance(declaration, FuncProto):
+            continue
         if isinstance(declaration, VarDecl):
             if declaration.value is not None:
                 _check_expression(declaration.value, functions, result)
@@ -65,6 +72,36 @@ def analyse(program: Program) -> AnalysisResult:
             )
 
     return result
+
+
+def _check_prototypes(program: Program, functions: dict[str, FuncDecl]) -> None:
+    """A prototype only promises a definition; without a linker it has to keep
+    that promise in the same file, and agree with it."""
+    seen: set[str] = set()
+    for declaration in program.declarations:
+        if not isinstance(declaration, FuncProto):
+            continue
+        if declaration.name in seen:
+            raise SemanticError(f"{_at(declaration)}повторний прототип '{declaration.name}'")
+        seen.add(declaration.name)
+
+        definition = functions.get(declaration.name)
+        if definition is None:
+            raise SemanticError(
+                f"{_at(declaration)}функцію '{declaration.name}' оголошено, але не визначено"
+            )
+        if definition.return_type != declaration.return_type:
+            raise SemanticError(
+                f"{_at(declaration)}прототип '{declaration.name}' повертає "
+                f"{declaration.return_type}, а визначення — {definition.return_type}"
+            )
+        prototype_types = [param.type for param in declaration.params]
+        definition_types = [param.type for param in definition.params]
+        if prototype_types != definition_types:
+            raise SemanticError(
+                f"{_at(declaration)}прототип '{declaration.name}' не збігається з "
+                "визначенням за типами параметрів"
+            )
 
 
 def _always_returns(node) -> bool:
@@ -156,7 +193,8 @@ def _check_statement(
         if node.value is not None:
             _check_expression(node.value, functions, result)
     elif isinstance(node, Print):
-        _check_expression(node.value, functions, result)
+        if not isinstance(node.value, StringConst):
+            _check_expression(node.value, functions, result)
     elif isinstance(node, Return):
         _check_return(node, function, functions, result)
     elif isinstance(node, ExprStmt):
@@ -191,7 +229,8 @@ def _check_return(node: Return, function: FuncDecl, functions: dict[str, FuncDec
 
 def _check_expression(node, functions: dict[str, FuncDecl], result: AnalysisResult) -> None:
     if isinstance(node, Const):
-        _warn_if_outside_int32(node.value, result)
+        if isinstance(node.value, int):
+            _warn_if_outside_int32(node.value, result)
         return
 
     if isinstance(node, UnaryOp) and node.operator == "-":
@@ -203,7 +242,7 @@ def _check_expression(node, functions: dict[str, FuncDecl], result: AnalysisResu
     if isinstance(node, Call):
         _check_call(node, functions, expects_value=True)
 
-    if isinstance(node, (Id, IncDec)):
+    if isinstance(node, (Id, IncDec, StringConst)):
         return
 
     for child in _expression_children(node):
@@ -233,7 +272,9 @@ def _check_call(node: Call, functions: dict[str, FuncDecl], expects_value: bool)
 def _unwrap_literal(node) -> int | None:
     while isinstance(node, Group):
         node = node.expression
-    return node.value if isinstance(node, Const) else None
+    if isinstance(node, Const) and isinstance(node.value, int):
+        return node.value
+    return None
 
 
 def _warn_if_outside_int32(value: int, result: AnalysisResult) -> None:
