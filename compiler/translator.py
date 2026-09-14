@@ -23,6 +23,7 @@ from pipeline import CompilationContext, run_pipeline
 class TranslationResult:
     ast: dict | None
     python_code: str
+    reconstructed_source: str
     codegen_error: str | None
     warnings: list[str]
     execution_output: str
@@ -37,6 +38,7 @@ def translate(source_code: str) -> TranslationResult:
     return TranslationResult(
         ast=ast_to_dict(context.ast),
         python_code=context.python_code, # type: ignore
+        reconstructed_source=context.reconstructed_source, # type: ignore
         codegen_error=_check_generated_python(context.python_code), # type: ignore
         warnings=context.analysis.warnings, # type: ignore
         execution_output=execution_output,

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import CodeEditor from "./components/editor/CodeEditor";
 import AstTree from "./components/ast-view/AstTree";
 import PythonOutput from "./components/output/PythonOutput";
+import SourceReconstruction from "./components/output/SourceReconstruction";
 import { compileSource, fetchExamples, CompileError } from "./api/compileApi";
 import type { CompileResult, Example } from "./types/ast";
 import "./App.css";
@@ -105,6 +106,11 @@ export default function App() {
         <section className="app-column app-column--ast">
           <h2 className="app-column-heading">AST</h2>
           <AstTree root={result?.ast ?? null} />
+        </section>
+
+        <section className="app-column app-column--reconstructed">
+          <h2 className="app-column-heading">C-код, відновлений з дерева</h2>
+          <SourceReconstruction reconstructedSource={result?.reconstructedSource ?? ""} />
         </section>
       </main>
     </div>

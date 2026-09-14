@@ -1,0 +1,22 @@
+.source-reconstruction {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+}
+
+.source-reconstruction > * {
+  height: 100%;
+  min-height: 0;
+}
+
+.source-reconstruction .cm-editor {
+  height: 100%;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.source-reconstruction .cm-scroller {
+  overflow: auto;
+}

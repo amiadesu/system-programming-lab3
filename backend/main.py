@@ -38,6 +38,7 @@ def compile_source(request: CompileRequest) -> CompileResponse:
     return CompileResponse(
         ast=result.ast,
         python_code=result.python_code,
+        reconstructed_source=result.reconstructed_source,
         codegen_error=result.codegen_error,
         warnings=result.warnings,
         execution_output=result.execution_output,

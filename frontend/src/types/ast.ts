@@ -8,6 +8,7 @@ export interface AstNode {
 export interface CompileResult {
   ast: AstNode;
   pythonCode: string;
+  reconstructedSource: string;
   codegenError: string | null;
   warnings: string[];
   executionOutput: string;

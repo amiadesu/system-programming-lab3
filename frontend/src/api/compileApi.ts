@@ -7,6 +7,7 @@ export class CompileError extends Error {}
 interface CompileResponseBody {
   ast: CompileResult["ast"];
   python_code: string;
+  reconstructed_source: string;
   codegen_error: string | null;
   warnings: string[];
   execution_output: string;
@@ -34,6 +35,7 @@ export async function compileSource(sourceCode: string): Promise<CompileResult> 
   return {
     ast: body.ast,
     pythonCode: body.python_code,
+    reconstructedSource: body.reconstructed_source ?? "",
     codegenError: body.codegen_error,
     warnings: body.warnings ?? [],
     executionOutput: body.execution_output,

@@ -55,7 +55,7 @@
   grid-template-rows: minmax(340px, 45vh) minmax(380px, 50vh);
   grid-template-areas:
     "code python"
-    "ast ast";
+    "ast reconstructed";
   gap: 16px;
   min-height: 0;
 }
@@ -78,6 +78,10 @@
   grid-area: ast;
 }
 
+.app-column--reconstructed {
+  grid-area: reconstructed;
+}
+
 .app-column-heading {
   margin: 0 0 8px;
   font-size: 11px;
@@ -92,7 +96,8 @@
     grid-template-areas:
       "code"
       "python"
-      "ast";
+      "ast"
+      "reconstructed";
   }
 
   .app-column {

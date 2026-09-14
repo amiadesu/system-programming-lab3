@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from ast_nodes import Program
+from c_printer import print_c
 from codegen import generate_python
 from name_resolution import NameResolution, resolve_names
 from parser import parse_source
@@ -47,10 +48,11 @@ class CompilationContext:
     resolution: NameResolution | None = None
     types: TypeInformation | None = None
     python_code: str | None = None
+    reconstructed_source: str | None = None
 
 
-#: The shape every pipeline stage has: read what it needs from `context`,
-#: write what it produces back onto `context`, return nothing.
+# The shape every pipeline stage has: read what it needs from `context`,
+# write what it produces back onto `context`, return nothing.
 Stage = Callable[[CompilationContext], None]
 
 
@@ -74,16 +76,22 @@ def _generate_code(context: CompilationContext) -> None:
     context.python_code = generate_python(context.ast, context.resolution, context.types) # type: ignore
 
 
-#: The pipeline itself, in the order its stages must run:
-#: lex+parse -> validate -> resolve names -> infer types -> generate Python.
-#: Each stage after `_parse` depends only on fields the stages before it in
-#: this tuple have already filled in.
+def _reconstruct_source(context: CompilationContext) -> None:
+    context.reconstructed_source = print_c(context.ast) # type: ignore
+
+
+# The pipeline itself, in the order its stages must run:
+# lex+parse -> validate -> resolve names -> infer types -> generate Python
+# -> print the AST back as C.
+# Each stage after `_parse` depends only on fields the stages before it in
+# this tuple have already filled in.
 STAGES: tuple[Stage, ...] = (
     _parse,
     _analyse,
     _resolve_names,
     _infer_types,
     _generate_code,
+    _reconstruct_source,
 )
 
 
