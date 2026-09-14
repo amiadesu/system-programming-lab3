@@ -1,20 +1,66 @@
 .ast-tree {
-  height: 100%;
-  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-radius: 6px;
   border: 1px solid var(--color-border);
   background: var(--color-panel);
 }
 
 .ast-tree--empty {
-  display: flex;
   align-items: center;
   justify-content: center;
-  height: 100%;
   color: var(--color-text-muted);
   font-size: 13px;
   text-align: center;
   padding: 0 24px;
+}
+
+.ast-tree-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.ast-tree-hint {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ast-tree-button {
+  flex-shrink: 0;
+  background: var(--color-panel-raised);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ast-tree-button:hover {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+}
+
+.ast-tree-canvas {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  cursor: grab;
+  touch-action: none;
+}
+
+.ast-tree-canvas:active {
+  cursor: grabbing;
 }
 
 .ast-link {
@@ -23,10 +69,22 @@
   stroke-width: 1.5px;
 }
 
-.ast-node circle {
+.ast-node {
+  cursor: pointer;
+}
+
+.ast-node-hit {
+  fill: transparent;
+}
+
+.ast-node-dot {
   fill: var(--color-panel);
   stroke: var(--color-accent);
   stroke-width: 1.5px;
+}
+
+.ast-node--collapsed .ast-node-dot {
+  fill: var(--color-accent);
 }
 
 .ast-node-type {
@@ -46,4 +104,10 @@
   font-family: var(--font-mono);
   font-size: 9px;
   opacity: 0.75;
+}
+
+.ast-node-count {
+  fill: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
 }
