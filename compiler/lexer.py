@@ -4,7 +4,9 @@ from errors import LexicalError
 
 reserved_words = {
     "int": "INT",
+    "double": "DOUBLE",
     "void": "VOID",
+    "const": "CONST",
     "if": "IF",
     "else": "ELSE",
     "while": "WHILE",
@@ -19,6 +21,8 @@ reserved_words = {
 tokens = [
     "IDENTIFIER",
     "INTEGER_CONST",
+    "DOUBLE_CONST",
+    "STRING_LITERAL",
     "EQ", "NEQ", "LEQ", "GEQ",
     "AND", "OR",
     "SHL", "SHR",
@@ -72,9 +76,48 @@ def t_unterminated_block_comment(t):
     raise LexicalError(f"Незакритий коментар /* починаючи з рядка {t.lexer.lineno}")
 
 
+ESCAPE_SEQUENCES = {
+    "n": "\n", "t": "\t", "r": "\r", "0": "\0",
+    "\\": "\\", '"': '"',
+}
+
+
+def t_STRING_LITERAL(t):
+    r'"(\\.|[^"\\\n])*"'
+    # Only usable as the argument of `print`; the grammar allows it nowhere else.
+    text = t.value[1:-1]
+    result = []
+    index = 0
+    while index < len(text):
+        if text[index] == "\\" and index + 1 < len(text):
+            escape = text[index + 1]
+            if escape not in ESCAPE_SEQUENCES:
+                raise LexicalError(
+                    f"Рядок {t.lexer.lineno}: невідома escape-послідовність '\\{escape}'"
+                )
+            result.append(ESCAPE_SEQUENCES[escape])
+            index += 2
+        else:
+            result.append(text[index])
+            index += 1
+    t.value = "".join(result)
+    return t
+
+
+def t_unterminated_string(t):
+    r'"[^"\n]*'
+    raise LexicalError(f"Рядок {t.lexer.lineno}: незакритий рядковий літерал")
+
+
 def t_IDENTIFIER(t):
     r"[a-zA-Z_][a-zA-Z0-9_]*"
     t.type = reserved_words.get(t.value, "IDENTIFIER")
+    return t
+
+
+def t_DOUBLE_CONST(t):
+    r"(\d+\.\d*|\.\d+)([eE][+-]?\d+)?|\d+[eE][+-]?\d+"
+    t.value = float(t.value)
     return t
 
 

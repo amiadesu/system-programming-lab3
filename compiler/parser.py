@@ -5,9 +5,9 @@ import ply.yacc as yacc
 from lexer import tokens, build_lexer
 from errors import SemanticError, SyntaxErrorAtLine
 from ast_nodes import (
-    Group, Program, VarDecl, Param, FuncDecl, Block, If, While, For, DoWhile,
-    Break, Continue, Return, Print, ExprStmt, Assign, CompoundAssign, IncDec,
-    BinOp, LogicalOp, UnaryOp, Ternary, Call, Id, Const,
+    Group, Program, VarDecl, Param, FuncDecl, FuncProto, Block, If, While, For,
+    DoWhile, Break, Continue, Return, Print, ExprStmt, Assign, CompoundAssign,
+    IncDec, BinOp, LogicalOp, UnaryOp, Ternary, Call, Id, Const, StringConst,
 )
 
 # PLY normally infers the start symbol from the rule defined first, ordering
@@ -102,18 +102,31 @@ def p_declaration(p):
 @_tracked
 def p_type_specifier(p):
     """type_specifier : INT
+                       | DOUBLE
                        | VOID"""
     p[0] = p[1]
 
 
+def p_declaration_specifier(p):
+    """declaration_specifier : type_specifier
+                              | CONST type_specifier"""
+    # (type, is_const).
+    p[0] = (p[len(p) - 1], len(p) == 3)
+
+
 def p_var_declaration(p):
-    "var_declaration : type_specifier init_declarator_list ';'"
+    "var_declaration : declaration_specifier init_declarator_list ';'"
     # One declaration may introduce several variables, so this rule produces a
     # list of nodes rather than a single one.
+    type_name, is_const = p[1]
     declarations = []
     for name, value, line in p[2]:
-        _reject_void_object(p[1], name, line)
-        declarations.append(VarDecl(p[1], name, value, line=line))
+        _reject_void_object(type_name, name, line)
+        if is_const and value is None:
+            raise SemanticError(
+                f"Рядок {line}: константу '{name}' треба ініціалізувати при оголошенні"
+            )
+        declarations.append(VarDecl(type_name, name, value, is_const=is_const, line=line))
     p[0] = declarations
 
 
@@ -137,10 +150,26 @@ def p_init_declarator_init(p):
     p[0] = (p[1], p[3], p.lineno(1))
 
 
+def _reject_const_return_type(is_const: bool, name: str, line: int | None) -> None:
+    if is_const:
+        position = f"Рядок {line}: " if line else ""
+        raise SemanticError(f"{position}const не застосовується до типу, який повертає '{name}'")
+
+
 @_tracked
 def p_fun_declaration(p):
-    "fun_declaration : type_specifier IDENTIFIER '(' params ')' compound_stmt"
-    p[0] = FuncDecl(p[1], p[2], p[4], p[6])
+    "fun_declaration : declaration_specifier IDENTIFIER '(' params ')' compound_stmt"
+    type_name, is_const = p[1]
+    _reject_const_return_type(is_const, p[2], p.lineno(2))
+    p[0] = FuncDecl(type_name, p[2], p[4], p[6])
+
+
+@_tracked
+def p_fun_prototype(p):
+    "fun_declaration : declaration_specifier IDENTIFIER '(' params ')' ';'"
+    type_name, is_const = p[1]
+    _reject_const_return_type(is_const, p[2], p.lineno(2))
+    p[0] = FuncProto(type_name, p[2], p[4])
 
 
 @_tracked
@@ -175,9 +204,10 @@ def p_param_list_multi(p):
 
 @_tracked
 def p_param(p):
-    "param : type_specifier IDENTIFIER"
-    _reject_void_object(p[1], p[2], p.lineno(2))
-    p[0] = Param(p[1], p[2])
+    "param : declaration_specifier IDENTIFIER"
+    type_name, is_const = p[1]
+    _reject_void_object(type_name, p[2], p.lineno(2))
+    p[0] = Param(type_name, p[2], is_const=is_const)
 
 
 @_tracked
@@ -229,9 +259,14 @@ def p_print_stmt(p):
     p[0] = Print(p[3])
 
 
+@_tracked
+def p_print_stmt_text(p):
+    "print_stmt : PRINT '(' STRING_LITERAL ')' ';'"
+    p[0] = Print(StringConst(p[3], line=p.lineno(3) or None))
+
+
 def _as_statements(statement) -> list:
-    """
-    Normalises a `statement` into a list.
+    """Normalises a `statement` into a list.
 
     A single declaration may expand into several nodes (`int a = 1, b;`), and
     an empty statement into none at all.
@@ -434,7 +469,8 @@ def p_expression_id(p):
 
 @_tracked
 def p_expression_const(p):
-    "expression : INTEGER_CONST"
+    """expression : INTEGER_CONST
+                   | DOUBLE_CONST"""
     p[0] = Const(p[1])
 
 

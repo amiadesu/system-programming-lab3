@@ -14,6 +14,7 @@ class VarDecl:
     type: str
     name: str
     value: object | None = None
+    is_const: bool = False
     line: int | None = None
 
 
@@ -35,6 +36,7 @@ class Group:
 class Param:
     type: str
     name: str
+    is_const: bool = False
     line: int | None = None
 
 
@@ -123,7 +125,21 @@ class Id:
 
 @dataclass
 class Const:
-    value: int
+    value: int | float
+    line: int | None = None
+
+
+@dataclass
+class StringConst:
+    value: str
+    line: int | None = None
+
+
+@dataclass
+class FuncProto:
+    return_type: str
+    name: str
+    params: list["Param"]
     line: int | None = None
 
 

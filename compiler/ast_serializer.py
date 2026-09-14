@@ -4,17 +4,20 @@ AST to JSON serialization.
 import dataclasses
 
 from ast_nodes import (
-    Assign, BinOp, Call, CompoundAssign, Const, FuncDecl, Group, Id, IncDec,
-    LogicalOp, Param, UnaryOp, VarDecl,
+    Assign, BinOp, Call, CompoundAssign, Const, FuncDecl, FuncProto, Group, Id,
+    IncDec, LogicalOp, Param, StringConst, UnaryOp, VarDecl,
 )
 
 
 def _node_label(node) -> str | None:
     if isinstance(node, Const):
         return str(node.value)
+    if isinstance(node, StringConst):
+        return repr(node.value)
     if isinstance(node, (VarDecl, Param)):
-        return f"{node.type} {node.name}"
-    if isinstance(node, FuncDecl):
+        qualifier = "const " if node.is_const else ""
+        return f"{qualifier}{node.type} {node.name}"
+    if isinstance(node, (FuncDecl, FuncProto)):
         return f"{node.return_type} {node.name}"
     if isinstance(node, (Id, Assign, Call)):
         return node.name
