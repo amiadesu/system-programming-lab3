@@ -1,5 +1,6 @@
 .python-output {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -26,7 +27,24 @@
   color: var(--color-text-muted);
 }
 
-.python-output-code,
+.python-output-code {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+}
+
+.python-output-code .cm-editor {
+  height: 100%;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.python-output-code .cm-scroller {
+  overflow: auto;
+}
+
 .python-output-terminal {
   margin: 0;
   flex: 1;

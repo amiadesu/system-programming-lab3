@@ -1,5 +1,6 @@
 .code-editor {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
   border-radius: 6px;
   border: 1px solid var(--color-border);

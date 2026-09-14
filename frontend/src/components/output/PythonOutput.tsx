@@ -1,3 +1,5 @@
+import CodeMirror from "@uiw/react-codemirror";
+import { python } from "@codemirror/lang-python";
 import "./PythonOutput.css";
 
 interface PythonOutputProps {
@@ -25,9 +27,16 @@ export default function PythonOutput({
             {warning}
           </div>
         ))}
-        <pre className="python-output-code">
-          <code>{pythonCode || "# код з'явиться тут після компіляції"}</code>
-        </pre>
+        <div className="python-output-code">
+          <CodeMirror
+            value={pythonCode || "# код з'явиться тут після компіляції"}
+            height="100%"
+            theme="dark"
+            extensions={[python()]}
+            editable={false}
+            basicSetup={{ lineNumbers: true, foldGutter: true }}
+          />
+        </div>
       </section>
 
       <section className="python-output-section">

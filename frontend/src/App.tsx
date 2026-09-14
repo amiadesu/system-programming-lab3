@@ -86,17 +86,12 @@ export default function App() {
       {compileErrorMessage && <div className="app-error-banner">{compileErrorMessage}</div>}
 
       <main className="app-columns">
-        <section className="app-column">
+        <section className="app-column app-column--code">
           <h2 className="app-column-heading">C-код</h2>
           <CodeEditor sourceCode={sourceCode} onChange={setSourceCode} />
         </section>
 
-        <section className="app-column">
-          <h2 className="app-column-heading">AST</h2>
-          <AstTree root={result?.ast ?? null} />
-        </section>
-
-        <section className="app-column">
+        <section className="app-column app-column--python">
           <h2 className="app-column-heading">Python</h2>
           <PythonOutput
             pythonCode={result?.pythonCode ?? ""}
@@ -105,6 +100,11 @@ export default function App() {
             executionOutput={result?.executionOutput ?? ""}
             executionError={result?.executionError ?? null}
           />
+        </section>
+
+        <section className="app-column app-column--ast">
+          <h2 className="app-column-heading">AST</h2>
+          <AstTree root={result?.ast ?? null} />
         </section>
       </main>
     </div>
