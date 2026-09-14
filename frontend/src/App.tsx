@@ -3,6 +3,7 @@ import CodeEditor from "./components/editor/CodeEditor";
 import AstTree from "./components/ast-view/AstTree";
 import PythonOutput from "./components/output/PythonOutput";
 import SourceReconstruction from "./components/output/SourceReconstruction";
+import SyntaxReference from "./components/reference/SyntaxReference";
 import { compileSource, fetchExamples, CompileError } from "./api/compileApi";
 import type { CompileResult, Example } from "./types/ast";
 import "./App.css";
@@ -19,6 +20,7 @@ export default function App() {
   const [result, setResult] = useState<CompileResult | null>(null);
   const [compileErrorMessage, setCompileErrorMessage] = useState<string | null>(null);
   const [isCompiling, setIsCompiling] = useState(false);
+  const [isReferenceOpen, setIsReferenceOpen] = useState(false);
 
   // The examples live in examples/*.c and are served by the backend, so the
   // repository stays the single source of truth for them.
@@ -58,8 +60,19 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <SyntaxReference isOpen={isReferenceOpen} onClose={() => setIsReferenceOpen(false)} />
+
       <header className="app-header">
-        <h1 className="app-title">C → Python</h1>
+        <div className="app-header-left">
+          <button
+            className="app-reference-button"
+            onClick={() => setIsReferenceOpen(true)}
+            aria-expanded={isReferenceOpen}
+          >
+            Синтаксис
+          </button>
+          <h1 className="app-title">C → Python</h1>
+        </div>
 
         <div className="app-header-actions">
           {examples.length > 0 && (

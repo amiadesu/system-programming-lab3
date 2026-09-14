@@ -32,10 +32,20 @@ export default function AstTree({ root }: AstTreeProps) {
   const canvasRef = useRef<SVGGElement>(null);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const treeData = useMemo(() => (root ? buildTree(root, "0") : null), [root]);
 
   useEffect(() => setCollapsed(new Set()), [treeData]);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setIsFullscreen(false);
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isFullscreen]);
 
   const fitToView = useCallback(() => {
     const svgElement = svgRef.current;
@@ -179,17 +189,30 @@ export default function AstTree({ root }: AstTreeProps) {
     if (treeData) fitToView();
   }, [treeData, fitToView]);
 
+  // Entering or leaving fullscreen changes the viewport the tree was fitted
+  // to, so it has to be fitted again once the new layout has been applied.
+  useEffect(() => {
+    if (!treeData) return;
+    const frame = requestAnimationFrame(fitToView);
+    return () => cancelAnimationFrame(frame);
+  }, [isFullscreen, treeData, fitToView]);
+
   if (!root) {
     return <div className="ast-tree ast-tree--empty">AST з'явиться тут після компіляції</div>;
   }
 
   return (
-    <div className="ast-tree">
+    <div className={isFullscreen ? "ast-tree ast-tree--fullscreen" : "ast-tree"}>
       <div className="ast-tree-toolbar">
         <span className="ast-tree-hint">Колесо — масштаб, перетягування — переміщення, клік по вузлу — згорнути</span>
-        <button className="ast-tree-button" onClick={fitToView}>
-          Вмістити
-        </button>
+        <div className="ast-tree-actions">
+          <button className="ast-tree-button" onClick={fitToView}>
+            Вмістити
+          </button>
+          <button className="ast-tree-button" onClick={() => setIsFullscreen((current) => !current)}>
+            {isFullscreen ? "Згорнути (Esc)" : "На весь екран"}
+          </button>
+        </div>
       </div>
       <svg ref={svgRef} className="ast-tree-canvas">
         <g ref={canvasRef} />
