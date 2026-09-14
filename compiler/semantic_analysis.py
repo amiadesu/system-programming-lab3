@@ -23,21 +23,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ast_nodes import (
-    Assign, BinOp, Block, Break, Call, CompoundAssign, Const, Continue,
-    DoWhile, ExprStmt, For, FuncDecl, FuncProto, Group, Id, If, IncDec,
-    LogicalOp, Print, Program, Return, StringConst, Ternary, UnaryOp, VarDecl,
-    While,
+    Block, Break, Call, Const, Continue, DoWhile, ExprStmt, For, FuncDecl,
+    FuncProto, Group, Id, If, IncDec, Print, Program, Return, StringConst,
+    UnaryOp, VarDecl, While, expression_children,
 )
-from errors import SemanticError
-
-INT32_MIN = -(2 ** 31)
-INT32_MAX = 2 ** 31 - 1
-
-
-def _at(node) -> str:
-    """Source position prefix for an error message, when the node has one."""
-    line = getattr(node, "line", None)
-    return f"Рядок {line}: " if line else ""
+from constants import INT32_MAX, INT32_MIN, CType
+from errors import SemanticError, error_prefix as _at
 
 
 @dataclass
@@ -64,7 +55,7 @@ def analyse(program: Program) -> AnalysisResult:
             continue
 
         _check_statement(declaration.body, declaration, functions, result)
-        if declaration.return_type != "void" and not _always_returns(declaration.body):
+        if declaration.return_type != CType.VOID and not _always_returns(declaration.body):
             raise SemanticError(
                 f"{_at(declaration)}функція '{declaration.name}' має тип "
                 f"{declaration.return_type}, але не повертає значення на всіх "
@@ -211,7 +202,7 @@ def _check_statement(
 
 
 def _check_return(node: Return, function: FuncDecl, functions: dict[str, FuncDecl], result: AnalysisResult) -> None:
-    if function.return_type == "void":
+    if function.return_type == CType.VOID:
         if node.value is not None:
             raise SemanticError(
                 f"{_at(node)}функція '{function.name}' має тип void "
@@ -245,7 +236,7 @@ def _check_expression(node, functions: dict[str, FuncDecl], result: AnalysisResu
     if isinstance(node, (Id, IncDec, StringConst)):
         return
 
-    for child in _expression_children(node):
+    for child in expression_children(node):
         _check_expression(child, functions, result)
 
 
@@ -262,7 +253,7 @@ def _check_call(node: Call, functions: dict[str, FuncDecl], expects_value: bool)
             f"передано {given}"
         )
 
-    if expects_value and function.return_type == "void":
+    if expects_value and function.return_type == CType.VOID:
         raise SemanticError(
             f"{_at(node)}функція '{node.name}' має тип void, "
             "її результат не можна використати як значення"
@@ -287,19 +278,3 @@ def _warn_if_outside_int32(value: int, result: AnalysisResult) -> None:
     )
     if message not in result.warnings:
         result.warnings.append(message)
-
-
-def _expression_children(node) -> list:
-    if isinstance(node, Group):
-        return [node.expression]
-    if isinstance(node, (BinOp, LogicalOp)):
-        return [node.left, node.right]
-    if isinstance(node, UnaryOp):
-        return [node.operand]
-    if isinstance(node, Ternary):
-        return [node.condition, node.if_true, node.if_false]
-    if isinstance(node, (Assign, CompoundAssign)):
-        return [node.value]
-    if isinstance(node, Call):
-        return list(node.arguments)
-    return []

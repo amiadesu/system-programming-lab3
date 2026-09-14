@@ -1,22 +1,7 @@
 import ply.lex as lex
 
+from constants import ESCAPE_SEQUENCES, RESERVED_WORDS
 from errors import LexicalError
-
-reserved_words = {
-    "int": "INT",
-    "double": "DOUBLE",
-    "void": "VOID",
-    "const": "CONST",
-    "if": "IF",
-    "else": "ELSE",
-    "while": "WHILE",
-    "for": "FOR",
-    "do": "DO",
-    "break": "BREAK",
-    "continue": "CONTINUE",
-    "return": "RETURN",
-    "print": "PRINT",
-}
 
 tokens = [
     "IDENTIFIER",
@@ -29,7 +14,7 @@ tokens = [
     "INC", "DEC",
     "PLUSEQ", "MINUSEQ", "TIMESEQ", "DIVEQ", "MODEQ",
     "ANDEQ", "OREQ", "XOREQ", "SHLEQ", "SHREQ",
-] + list(reserved_words.values())
+] + list(RESERVED_WORDS.values())
 
 literals = [
     "+", "-", "*", "/", "%", "=", "<", ">", "!", "~", "&", "|", "^", "?", ":",
@@ -76,12 +61,6 @@ def t_unterminated_block_comment(t):
     raise LexicalError(f"Незакритий коментар /* починаючи з рядка {t.lexer.lineno}")
 
 
-ESCAPE_SEQUENCES = {
-    "n": "\n", "t": "\t", "r": "\r", "0": "\0",
-    "\\": "\\", '"': '"',
-}
-
-
 def t_STRING_LITERAL(t):
     r'"(\\.|[^"\\\n])*"'
     # Only usable as the argument of `print`; the grammar allows it nowhere else.
@@ -111,7 +90,7 @@ def t_unterminated_string(t):
 
 def t_IDENTIFIER(t):
     r"[a-zA-Z_][a-zA-Z0-9_]*"
-    t.type = reserved_words.get(t.value, "IDENTIFIER")
+    t.type = RESERVED_WORDS.get(t.value, "IDENTIFIER")
     return t
 
 

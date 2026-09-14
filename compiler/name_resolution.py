@@ -22,20 +22,12 @@ import keyword
 from dataclasses import dataclass, field
 
 from ast_nodes import (
-    Assign, BinOp, Block, Break, Call, CompoundAssign, Continue, DoWhile,
-    ExprStmt, For, FuncDecl, FuncProto, Group, Id, If, IncDec, LogicalOp,
-    Print, Program, Return, StringConst, Ternary, UnaryOp, VarDecl, While,
+    Assign, Block, Break, Call, CompoundAssign, Continue, DoWhile, ExprStmt,
+    For, FuncDecl, StringConst, FuncProto, Id, If, IncDec, Print, Program, Return, VarDecl,
+    While, expression_children,
 )
-from errors import SemanticError
-
-
-def _at(node) -> str:
-    """Source position prefix for an error message, when the node has one."""
-    line = getattr(node, "line", None)
-    return f"Рядок {line}: " if line else ""
-
-# Names the generated module uses itself and therefore may not be shadowed.
-RESERVED_NAMES = {"math"}
+from constants import RESERVED_NAMES
+from errors import SemanticError, error_prefix as _at
 
 
 def _pick_name(preferred: str, forbidden: set[str]) -> str:
@@ -293,24 +285,8 @@ def _bind_global_initializer(
                 f"'{node.name}', яка не є глобальною змінною"
             )
         resolution._record(node, module_names[node.name])
-    for child in _expression_children(node):
+    for child in expression_children(node):
         _bind_global_initializer(child, global_names, module_names, resolution)
-
-
-def _expression_children(node) -> list:
-    if isinstance(node, Group):
-        return [node.expression]
-    if isinstance(node, (BinOp, LogicalOp)):
-        return [node.left, node.right]
-    if isinstance(node, UnaryOp):
-        return [node.operand]
-    if isinstance(node, Ternary):
-        return [node.condition, node.if_true, node.if_false]
-    if isinstance(node, (Assign, CompoundAssign)):
-        return [node.value]
-    if isinstance(node, Call):
-        return list(node.arguments)
-    return []
 
 
 def _bind_block(block: Block, binder: _Binder, new_scope: bool = True) -> None:
@@ -378,5 +354,5 @@ def _bind_expression(node, binder: _Binder) -> None:
         return
     if isinstance(node, Call):
         binder.functions_called.add(node.name)
-    for child in _expression_children(node):
+    for child in expression_children(node):
         _bind_expression(child, binder)

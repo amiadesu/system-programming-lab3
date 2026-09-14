@@ -8,60 +8,11 @@ from ast_nodes import (
     DoWhile, Break, Continue, Return, Print, ExprStmt, Assign, CompoundAssign,
     IncDec, BinOp, LogicalOp, UnaryOp, Ternary, Call, Id, Const, StringConst,
 )
-from name_resolution import NameResolution, resolve_names
-from type_inference import DOUBLE, INT, TypeInformation, infer_types
-from interpreter import DOUBLE_OUTPUT_PRECISION
-
-INDENT_UNIT = "    "
-
-# Python precedence levels, lowest binds loosest.
-#
-# For left-associative operations right precedence is one higher than left precedence, 
-# so that the right operand of a left-associative operator is parenthesised when it has the same operator.
-#
-# For right-associative operations it is the other way around.
-#
-# For comparison operators, both sides are parenthesised when they have the same operator, 
-# to prevent Python from chaining them.
-PREC_WALRUS = 0
-PREC_TERNARY = 1
-PREC_OR = 2
-PREC_AND = 3
-PREC_NOT = 4
-PREC_COMPARISON = 5
-PREC_BITWISE_OR = 6
-PREC_BITWISE_XOR = 7
-PREC_BITWISE_AND = 8
-PREC_SHIFT = 9
-PREC_ADDITIVE = 10
-PREC_MULTIPLICATIVE = 11
-PREC_UNARY = 12
-PREC_ATOM = 13
-
-COMPARISON_OPERATORS = {"==", "!=", "<", ">", "<=", ">="}
-
-# Specifying the precedence of the operators in the AST is not enough to generate correct Python code, 
-# because C and Python disagree about the relative precedence of some operators. 
-# The following table records the precedence of each binary operator in Python, 
-# as (level of the result, minimum required of the right operand). 
-# All of them are left-associative, so the right operand sits one level higher.
-BINARY_LEVELS = {
-    "|": (PREC_BITWISE_OR, PREC_BITWISE_XOR),
-    "^": (PREC_BITWISE_XOR, PREC_BITWISE_AND),
-    "&": (PREC_BITWISE_AND, PREC_SHIFT),
-    "<<": (PREC_SHIFT, PREC_ADDITIVE),
-    ">>": (PREC_SHIFT, PREC_ADDITIVE),
-    "+": (PREC_ADDITIVE, PREC_MULTIPLICATIVE),
-    "-": (PREC_ADDITIVE, PREC_MULTIPLICATIVE),
-    "*": (PREC_MULTIPLICATIVE, PREC_UNARY),
-}
-
-PREC_DEFAULT_MINIMUM = PREC_TERNARY
-PREC_INSIDE_PARENTHESES = PREC_WALRUS # absolute minimum precedence
-
-PREAMBLE = (
-    "import math\n\n"
+from constants import (
+    COMPARISON_OPERATORS, CType, Precedence, BINARY_LEVELS, INDENT_UNIT, PREAMBLE, DOUBLE_OUTPUT_PRECISION
 )
+from name_resolution import NameResolution, resolve_names
+from type_inference import TypeInformation, infer_types
 
 
 def generate_python(
@@ -89,7 +40,7 @@ class _Context:
             for declaration in program.declarations
             if isinstance(declaration, FuncDecl)
         }
-        self.current_return_type = INT
+        self.current_return_type = CType.INT
         self.uses_math = False
         self.current_function: str | None = None
         self.continue_prelude: list = []
@@ -172,12 +123,12 @@ def _generate_var_decl(node: VarDecl, indent: int, context: _Context) -> str:
     name = context.name_of(node)
     if node.value is not None:
         return f"{_pad(indent)}{name} = {_converted(node.value, node.type, context)}\n"
-    return f"{_pad(indent)}{name} = {'0.0' if node.type == DOUBLE else '0'}\n"
+    return f"{_pad(indent)}{name} = {'0.0' if node.type == CType.DOUBLE else '0'}\n"
 
 
 @_generate_statement.register(If)
 def _generate_if(node: If, indent: int, context: _Context) -> str:
-    text = f"{_pad(indent)}if {_expression(node.condition, PREC_DEFAULT_MINIMUM, context)}:\n"
+    text = f"{_pad(indent)}if {_expression(node.condition, Precedence.DEFAULT_MINIMUM, context)}:\n"
     text += _generate_statement(node.then_branch, indent + 1, context)
     if node.else_branch is not None and node.else_branch.statements:
         text += f"{_pad(indent)}else:\n"
@@ -187,7 +138,7 @@ def _generate_if(node: If, indent: int, context: _Context) -> str:
 
 @_generate_statement.register(While)
 def _generate_while(node: While, indent: int, context: _Context) -> str:
-    text = f"{_pad(indent)}while {_expression(node.condition, PREC_DEFAULT_MINIMUM, context)}:\n"
+    text = f"{_pad(indent)}while {_expression(node.condition, Precedence.DEFAULT_MINIMUM, context)}:\n"
     context.continue_prelude.append(None)
     text += _generate_statement(node.body, indent + 1, context)
     context.continue_prelude.pop()
@@ -200,7 +151,7 @@ def _generate_for(node: For, indent: int, context: _Context) -> str:
         _generate_statement(statement, indent, context) for statement in node.init
     )
     condition = (
-        _expression(node.condition, PREC_DEFAULT_MINIMUM, context)
+        _expression(node.condition, Precedence.DEFAULT_MINIMUM, context)
         if node.condition is not None
         else "True"
     )
@@ -226,7 +177,7 @@ def _generate_for(node: For, indent: int, context: _Context) -> str:
 @_generate_statement.register(DoWhile)
 def _generate_do_while(node: DoWhile, indent: int, context: _Context) -> str:
     # Python has no do-while, so the loop is expressed as a while True with a break at the end.
-    condition = _expression(node.condition, PREC_COMPARISON, context)
+    condition = _expression(node.condition, Precedence.COMPARISON, context)
 
     def tail(tail_indent: int) -> str:
         return f"{_pad(tail_indent)}if not {condition}:\n{_pad(tail_indent + 1)}break\n"
@@ -262,8 +213,8 @@ def _generate_return(node: Return, indent: int, context: _Context) -> str:
 def _generate_print(node: Print, indent: int, context: _Context) -> str:
     if isinstance(node.value, StringConst):
         return f"{_pad(indent)}print({node.value.value!r})\n"
-    if context.type_of(node.value) == DOUBLE:
-        rendered = _expression(node.value, PREC_INSIDE_PARENTHESES, context)
+    if context.type_of(node.value) == CType.DOUBLE:
+        rendered = _expression(node.value, Precedence.INSIDE_PARENTHESES, context)
         return f'{_pad(indent)}print(f"{{{rendered}:.{DOUBLE_OUTPUT_PRECISION}f}}")\n'
     return f"{_pad(indent)}print({_int_normalised(node.value, context)})\n"
 
@@ -274,22 +225,22 @@ def _generate_expr_stmt(node: ExprStmt, indent: int, context: _Context) -> str:
 
     if isinstance(inner, Assign):
         target = context.name_of(inner)
-        return f"{_pad(indent)}{target} = {_converted(inner.value, context.type_of(inner), context)}\n"
+        return f"{_pad(indent)}{target} = {_converted(inner.value, CType(context.type_of(inner)), context)}\n"
 
     if isinstance(inner, CompoundAssign):
         target = context.name_of(inner)
-        target_type = context.type_of(inner)
+        target_type = CType(context.type_of(inner))
         combined = _compound_value(inner, target, target_type, context)
         if combined is not None:
             return f"{_pad(indent)}{target} = {combined}\n"
-        value = _expression(inner.value, PREC_DEFAULT_MINIMUM, context)
+        value = _expression(inner.value, Precedence.DEFAULT_MINIMUM, context)
         return f"{_pad(indent)}{target} {inner.operator}= {value}\n"
 
     if isinstance(inner, IncDec):
         target = context.name_of(inner)
         return f"{_pad(indent)}{target} {inner.operator}= 1\n"
 
-    return f"{_pad(indent)}{_expression(inner, PREC_DEFAULT_MINIMUM, context)}\n"
+    return f"{_pad(indent)}{_expression(inner, Precedence.DEFAULT_MINIMUM, context)}\n"
 
 
 def _yields_bool(node) -> bool:
@@ -314,7 +265,7 @@ def _yields_bool(node) -> bool:
     return False
 
 
-def _converted(node, target_type: str, context: _Context) -> str:
+def _converted(node, target_type: CType, context: _Context) -> str:
     """
     Renders `node` for a slot of `target_type`, applying the C conversion.
 
@@ -323,23 +274,23 @@ def _converted(node, target_type: str, context: _Context) -> str:
     division and every other operator gives the same answer for an int as for
     the double it stands for.
     """
-    if target_type == INT and context.type_of(node) == DOUBLE:
+    if target_type == CType.INT and context.type_of(node) == CType.DOUBLE:
         context.uses_math = True
-        return f"math.trunc({_expression(node, PREC_INSIDE_PARENTHESES, context)})"
-    if target_type == INT:
+        return f"math.trunc({_expression(node, Precedence.INSIDE_PARENTHESES, context)})"
+    if target_type == CType.INT:
         return _int_normalised(node, context)
-    if context.type_of(node) == INT:
+    if context.type_of(node) == CType.INT:
         if isinstance(node, Const):
             return repr(float(node.value))
-        return f"float({_expression(node, PREC_INSIDE_PARENTHESES, context)})"
-    return _expression(node, PREC_INSIDE_PARENTHESES, context)
+        return f"float({_expression(node, Precedence.INSIDE_PARENTHESES, context)})"
+    return _expression(node, Precedence.INSIDE_PARENTHESES, context)
 
 
 def _int_normalised(node, context: _Context) -> str:
     """
     Renders `node` so that the result is an `int` and never a `bool`.
     """
-    text = _expression(node, PREC_INSIDE_PARENTHESES, context)
+    text = _expression(node, Precedence.INSIDE_PARENTHESES, context)
     return f"int({text})" if _yields_bool(node) else text
 
 
@@ -348,35 +299,35 @@ def _bool_normalised(node, context: _Context) -> str:
     Renders `node` as an operand of `and`/`or`, which return an operand rather than a truth value in Python.
     """
     if _yields_bool(node):
-        return _expression(node, PREC_AND, context)
-    return f"bool({_expression(node, PREC_INSIDE_PARENTHESES, context)})"
+        return _expression(node, Precedence.AND, context)
+    return f"bool({_expression(node, Precedence.INSIDE_PARENTHESES, context)})"
 
 
 def _divide_or_modulo(node: BinOp, left: str, context: _Context) -> str:
     """
     Renders `/` and `%`, neither of which maps onto a Python operator.
     """
-    if node.operator == "/" and context.type_of(node) == DOUBLE:
-        right = _expression(node.right, PREC_UNARY, context)
+    if node.operator == "/" and context.type_of(node) == CType.DOUBLE:
+        right = _expression(node.right, Precedence.UNARY, context)
         return f"{left} / {right}"
 
     context.uses_math = True
     if node.operator == "/":
-        right = _expression(node.right, PREC_UNARY, context)
+        right = _expression(node.right, Precedence.UNARY, context)
         return f"math.trunc({left} / {right})"
-    right = _expression(node.right, PREC_DEFAULT_MINIMUM, context)
+    right = _expression(node.right, Precedence.DEFAULT_MINIMUM, context)
     return f"int(math.fmod({left}, {right}))"
 
 
-def _compound_value(node: CompoundAssign, target: str, target_type: str, context: _Context) -> str | None:
+def _compound_value(node: CompoundAssign, target: str, target_type: CType, context: _Context) -> str | None:
     value_type = context.type_of(node.value)
-    narrows = target_type == INT and value_type == DOUBLE
+    narrows = target_type == CType.INT and value_type == CType.DOUBLE
 
     if node.operator in ("/", "%"):
-        right_minimum = PREC_UNARY if node.operator == "/" else PREC_DEFAULT_MINIMUM
+        right_minimum = Precedence.UNARY if node.operator == "/" else Precedence.DEFAULT_MINIMUM
         right = _expression(node.value, right_minimum, context)
         if node.operator == "/":
-            if target_type == DOUBLE or value_type == DOUBLE:
+            if target_type == CType.DOUBLE or value_type == CType.DOUBLE:
                 combined = f"{target} / {right}"
                 return f"math.trunc({combined})" if narrows else combined
             context.uses_math = True
@@ -410,31 +361,31 @@ def _generate_expression(node, context: _Context) -> tuple[str, int]:
 
 @_generate_expression.register(Group)
 def _generate_group_expr(node: Group, context: _Context) -> tuple[str, int]:
-    return f"({_expression(node.expression, PREC_INSIDE_PARENTHESES, context)})", PREC_ATOM
+    return f"({_expression(node.expression, Precedence.INSIDE_PARENTHESES, context)})", Precedence.ATOM
 
 
 @_generate_expression.register(Assign)
 def _generate_assign_expr(node: Assign, context: _Context) -> tuple[str, int]:
     target = context.name_of(node)
-    value = _converted(node.value, context.type_of(node), context)
-    return f"{target} := {value}", PREC_WALRUS
+    value = _converted(node.value, CType(context.type_of(node)), context)
+    return f"{target} := {value}", Precedence.WALRUS
 
 
 @_generate_expression.register(BinOp)
 def _generate_binop_expr(node: BinOp, context: _Context) -> tuple[str, int]:
     if node.operator in ("/", "%"):
-        left_minimum = PREC_MULTIPLICATIVE if node.operator == "/" else PREC_DEFAULT_MINIMUM
+        left_minimum = Precedence.MULTIPLICATIVE if node.operator == "/" else Precedence.DEFAULT_MINIMUM
         left = _expression(node.left, left_minimum, context)
         rendered = _divide_or_modulo(node, left, context)
-        level = PREC_MULTIPLICATIVE if rendered.startswith(f"{left} /") else PREC_ATOM
+        level = Precedence.MULTIPLICATIVE if rendered.startswith(f"{left} /") else Precedence.ATOM
         return rendered, level
 
     if node.operator in COMPARISON_OPERATORS:
-        # Requiring one level above PREC_COMPARISON on both sides parenthesises
+        # Requiring one level above Precedence.COMPARISON on both sides parenthesises
         # any nested comparison, which is what stops Python from chaining them.
-        left = _expression(node.left, PREC_BITWISE_OR, context)
-        right = _expression(node.right, PREC_BITWISE_OR, context)
-        return f"{left} {node.operator} {right}", PREC_COMPARISON
+        left = _expression(node.left, Precedence.BITWISE_OR, context)
+        right = _expression(node.right, Precedence.BITWISE_OR, context)
+        return f"{left} {node.operator} {right}", Precedence.COMPARISON
 
     level, right_level = BINARY_LEVELS[node.operator]
     left = _expression(node.left, level, context)
@@ -445,7 +396,7 @@ def _generate_binop_expr(node: BinOp, context: _Context) -> tuple[str, int]:
 @_generate_expression.register(LogicalOp)
 def _generate_logical_expr(node: LogicalOp, context: _Context) -> tuple[str, int]:
     keyword = "and" if node.operator == "&&" else "or"
-    level = PREC_AND if node.operator == "&&" else PREC_OR
+    level = Precedence.AND if node.operator == "&&" else Precedence.OR
     left = _bool_normalised(node.left, context)
     right = _bool_normalised(node.right, context)
     return f"{left} {keyword} {right}", level
@@ -453,25 +404,25 @@ def _generate_logical_expr(node: LogicalOp, context: _Context) -> tuple[str, int
 
 @_generate_expression.register(Ternary)
 def _generate_ternary_expr(node: Ternary, context: _Context) -> tuple[str, int]:
-    condition = _expression(node.condition, PREC_OR, context)
+    condition = _expression(node.condition, Precedence.OR, context)
     if _yields_bool(node):
-        if_true = _expression(node.if_true, PREC_OR, context)
-        if_false = _expression(node.if_false, PREC_TERNARY, context)
+        if_true = _expression(node.if_true, Precedence.OR, context)
+        if_false = _expression(node.if_false, Precedence.TERNARY, context)
     else:
         if_true = _int_normalised(node.if_true, context)
         if_false = _int_normalised(node.if_false, context)
-    return f"{if_true} if {condition} else {if_false}", PREC_TERNARY
+    return f"{if_true} if {condition} else {if_false}", Precedence.TERNARY
 
 
 @_generate_expression.register(CompoundAssign)
 def _generate_compound_assign_expr(node: CompoundAssign, context: _Context) -> tuple[str, int]:
     target = context.name_of(node)
-    target_type = context.type_of(node)
+    target_type = CType(context.type_of(node))
     value = _compound_value(node, target, target_type, context)
     if value is None:
         _, right_level = BINARY_LEVELS[node.operator]
         value = f"{target} {node.operator} {_expression(node.value, right_level, context)}"
-    return f"{target} := {value}", PREC_WALRUS
+    return f"{target} := {value}", Precedence.WALRUS
 
 
 @_generate_expression.register(IncDec)
@@ -479,18 +430,18 @@ def _generate_inc_dec_expr(node: IncDec, context: _Context) -> tuple[str, int]:
     target = context.name_of(node)
     updated = f"{target} := {target} {node.operator} 1"
     if node.is_prefix:
-        return updated, PREC_WALRUS
+        return updated, Precedence.WALRUS
     undo = "-" if node.operator == "+" else "+"
-    return f"({updated}) {undo} 1", PREC_ADDITIVE
+    return f"({updated}) {undo} 1", Precedence.ADDITIVE
 
 
 @_generate_expression.register(UnaryOp)
 def _generate_unary_expr(node: UnaryOp, context: _Context) -> tuple[str, int]:
     if node.operator == "!":
-        return f"not {_expression(node.operand, PREC_ATOM, context)}", PREC_NOT
+        return f"not {_expression(node.operand, Precedence.ATOM, context)}", Precedence.NOT
     if node.operator == "~" and _yields_bool(node.operand):
-        return f"~{_int_normalised(node.operand, context)}", PREC_UNARY
-    return f"{node.operator}{_expression(node.operand, PREC_ATOM, context)}", PREC_UNARY
+        return f"~{_int_normalised(node.operand, context)}", Precedence.UNARY
+    return f"{node.operator}{_expression(node.operand, Precedence.ATOM, context)}", Precedence.UNARY
 
 
 @_generate_expression.register(Call)
@@ -498,17 +449,17 @@ def _generate_call_expr(node: Call, context: _Context) -> tuple[str, int]:
     function = context.functions.get(node.name)
     parameter_types = [param.type for param in function.params] if function else []
     args = ", ".join(
-        _converted(argument, parameter_types[index] if index < len(parameter_types) else INT, context)
+        _converted(argument, parameter_types[index] if index < len(parameter_types) else CType.INT, context)
         for index, argument in enumerate(node.arguments)
     )
-    return f"{context.name_of_function(node.name)}({args})", PREC_ATOM
+    return f"{context.name_of_function(node.name)}({args})", Precedence.ATOM
 
 
 @_generate_expression.register(Id)
 def _generate_id_expr(node: Id, context: _Context) -> tuple[str, int]:
-    return context.name_of(node), PREC_ATOM
+    return context.name_of(node), Precedence.ATOM
 
 
 @_generate_expression.register(Const)
 def _generate_const_expr(node: Const, context: _Context) -> tuple[str, int]:
-    return repr(node.value), PREC_ATOM
+    return repr(node.value), Precedence.ATOM

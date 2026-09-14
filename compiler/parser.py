@@ -4,6 +4,7 @@ import ply.yacc as yacc
 
 from lexer import tokens, build_lexer
 from errors import SemanticError, SyntaxErrorAtLine
+from constants import COMPOUND_ASSIGN_OPERATORS, CType
 from ast_nodes import (
     Group, Program, VarDecl, Param, FuncDecl, FuncProto, Block, If, While, For,
     DoWhile, Break, Continue, Return, Print, ExprStmt, Assign, CompoundAssign,
@@ -66,9 +67,9 @@ def _tracked(rule):
     return wrapper
 
 
-def _reject_void_object(type_name: str, object_name: str, line: int) -> None:
+def _reject_void_object(type_name: CType, object_name: str, line: int) -> None:
     """`void` is a valid type specifier but not a valid type for storage."""
-    if type_name == "void":
+    if type_name == CType.VOID:
         raise SemanticError(
             f"Рядок {line}: змінна '{object_name}' не може мати тип void"
         )
@@ -104,7 +105,7 @@ def p_type_specifier(p):
     """type_specifier : INT
                        | DOUBLE
                        | VOID"""
-    p[0] = p[1]
+    p[0] = CType(p[1])
 
 
 def p_declaration_specifier(p):
@@ -395,8 +396,7 @@ def p_expression_compound_assign(p):
                    | IDENTIFIER XOREQ expression
                    | IDENTIFIER SHLEQ expression
                    | IDENTIFIER SHREQ expression"""
-    # p[2] is the matched text, so "+=" yields the plain operator "+".
-    p[0] = CompoundAssign(p[2][:-1], p[1], p[3])
+    p[0] = CompoundAssign(COMPOUND_ASSIGN_OPERATORS[p[2]], p[1], p[3])
 
 
 @_tracked

@@ -9,28 +9,21 @@ from ast_nodes import (
     Continue, Return, Print, ExprStmt, Assign, CompoundAssign, IncDec, BinOp,
     LogicalOp, UnaryOp, Ternary, Call, Id, Const, StringConst,
 )
+from constants import CType, DOUBLE_OUTPUT_PRECISION, ENTRY_POINT, MAX_CALL_DEPTH, MAX_STEPS
 from errors import ExecutionLimitExceeded, RuntimeErrorInProgram, SemanticError
-
-#: Guards against a program that never terminates blocking the server.
-MAX_STEPS = 1_000_000
-MAX_CALL_DEPTH = 500
 
 # Each interpreted C call costs several Python frames, so the default limit of
 # 1000 would be hit long before MAX_CALL_DEPTH.
 sys.setrecursionlimit(20_000)
 
 
-# Digits after the point that `print` shows for a double, matching C's "%f".
-DOUBLE_OUTPUT_PRECISION = 6
-
-
-def convert(value, type_name: str):
+def convert(value, type_name: CType):
     """
     Applies a C conversion to `value` on its way into a slot of `type_name`.
     Assignment, parameter passing and `return` all convert: a double stored in
     an int is truncated toward zero, an int stored in a double widens.
     """
-    if type_name == "double":
+    if type_name == CType.DOUBLE:
         return float(value)
     return int(value)  # int() truncates toward zero, as C does
 
@@ -104,10 +97,10 @@ class Scope:
 
     def __init__(self, parent: "Scope | None" = None):
         self.variables: dict[str, object] = {}
-        self.types: dict[str, str] = {}
+        self.types: dict[str, CType] = {}
         self.parent = parent
 
-    def declare(self, name: str, value, type_name: str = "int") -> None:
+    def declare(self, name: str, value, type_name: CType = CType.INT) -> None:
         """Introduces `name` in *this* scope, shadowing any outer one."""
         if name in self.variables:
             raise SemanticError(f"Повторне оголошення змінної '{name}'")
@@ -124,7 +117,7 @@ class Scope:
         scope = self._find(name)
         if scope is None:
             raise RuntimeErrorInProgram(f"Присвоєння неоголошеній змінній '{name}'")
-        scope.variables[name] = convert(value, scope.types.get(name, "int"))
+        scope.variables[name] = convert(value, scope.types.get(name, CType.INT))
 
     def _find(self, name: str) -> "Scope | None":
         scope: Scope | None = self
@@ -162,7 +155,7 @@ class Interpreter:
                 _execute_statement(declaration, self._global_scope, self)
 
     def type_of(self, node) -> str:
-        return self._types.type_of(node) if self._types is not None else "int"
+        return self._types.type_of(node) if self._types is not None else CType.INT
 
     def count_step(self) -> None:
         self._steps += 1
@@ -172,7 +165,7 @@ class Interpreter:
                 "ймовірно, програма зациклилась"
             )
 
-    def run(self, entry_point: str = "main") -> int:
+    def run(self, entry_point: str = ENTRY_POINT) -> int:
         if entry_point not in self._functions:
             raise SemanticError(f"У програмі немає функції '{entry_point}'")
         if self._functions[entry_point].params:
@@ -202,7 +195,7 @@ class Interpreter:
         try:
             _execute_statement(function.body, scope, self)
         except _ReturnSignal as signal:
-            return convert(signal.value, function.return_type) if function.return_type != "void" else 0 # type: ignore
+            return convert(signal.value, function.return_type) if function.return_type != CType.VOID else 0 # type: ignore
         finally:
             self._depth -= 1
         return 0
@@ -376,7 +369,7 @@ def _evaluate_ternary(node: Ternary, scope: Scope, interpreter: Interpreter):
     interpreter.count_step()
     branch = node.if_true if _evaluate_expression(node.condition, scope, interpreter) else node.if_false
     value = _evaluate_expression(branch, scope, interpreter)
-    return convert(value, interpreter.type_of(node))
+    return convert(value, CType(interpreter.type_of(node)))
 
 
 @_evaluate_expression.register(CompoundAssign)

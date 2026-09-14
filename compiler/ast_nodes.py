@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from constants import CType
+
 
 @dataclass
 class Program:
@@ -11,7 +13,7 @@ class Program:
 
 @dataclass
 class VarDecl:
-    type: str
+    type: CType
     name: str
     value: object | None = None
     is_const: bool = False
@@ -34,7 +36,7 @@ class Group:
 
 @dataclass
 class Param:
-    type: str
+    type: CType
     name: str
     is_const: bool = False
     line: int | None = None
@@ -42,7 +44,7 @@ class Param:
 
 @dataclass
 class FuncDecl:
-    return_type: str
+    return_type: CType
     name: str
     params: list[Param]
     body: "Block"
@@ -137,7 +139,7 @@ class StringConst:
 
 @dataclass
 class FuncProto:
-    return_type: str
+    return_type: CType
     name: str
     params: list["Param"]
     line: int | None = None
@@ -199,3 +201,22 @@ class IncDec:
     name: str
     is_prefix: bool
     line: int | None = None
+
+
+def expression_children(node) -> list:
+    """
+    The direct sub-expressions of an expression node, in evaluation order.
+    """
+    if isinstance(node, Group):
+        return [node.expression]
+    if isinstance(node, (BinOp, LogicalOp)):
+        return [node.left, node.right]
+    if isinstance(node, UnaryOp):
+        return [node.operand]
+    if isinstance(node, Ternary):
+        return [node.condition, node.if_true, node.if_false]
+    if isinstance(node, (Assign, CompoundAssign)):
+        return [node.value]
+    if isinstance(node, Call):
+        return list(node.arguments)
+    return []

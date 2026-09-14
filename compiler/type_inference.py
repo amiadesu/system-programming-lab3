@@ -9,35 +9,22 @@ from ast_nodes import (
     Assign, BinOp, Call, CompoundAssign, Const, FuncDecl, Group, Id, IncDec,
     LogicalOp, Program, StringConst, Ternary, UnaryOp,
 )
-from errors import SemanticError
+from constants import COMPARISON_OPERATORS, CType, INTEGER_ONLY_OPERATORS
+from errors import SemanticError, error_prefix as _at
 from name_resolution import NameResolution
-
-INT = "int"
-DOUBLE = "double"
-VOID = "void"
-
-# Operators C only defines for integer operands.
-INTEGER_ONLY_OPERATORS = {"%", "&", "|", "^", "<<", ">>"}
-
-COMPARISON_OPERATORS = {"==", "!=", "<", ">", "<=", ">="}
-
-
-def _at(node) -> str:
-    line = getattr(node, "line", None)
-    return f"Рядок {line}: " if line else ""
 
 
 @dataclass
 class TypeInformation:
     """Expression node -> its C type, keyed by `id()` as elsewhere."""
 
-    expression_type: dict[int, str] = field(default_factory=dict)
+    expression_type: dict[int, CType] = field(default_factory=dict)
     _kept_alive: list = field(default_factory=list)
 
-    def type_of(self, node) -> str:
-        return self.expression_type.get(id(node), INT)
+    def type_of(self, node) -> CType:
+        return self.expression_type.get(id(node), CType.INT)
 
-    def _record(self, node, type_name: str) -> str:
+    def _record(self, node, type_name: CType) -> CType:
         self.expression_type[id(node)] = type_name
         self._kept_alive.append(node)
         return type_name
@@ -45,7 +32,7 @@ class TypeInformation:
 
 def infer_types(program: Program, resolution: NameResolution) -> TypeInformation:
     information = TypeInformation()
-    return_types = {
+    return_types: dict[str, CType] = {
         declaration.name: declaration.return_type
         for declaration in program.declarations
         if isinstance(declaration, FuncDecl)
@@ -55,7 +42,7 @@ def infer_types(program: Program, resolution: NameResolution) -> TypeInformation
 
 
 class _Inference:
-    def __init__(self, resolution: NameResolution, return_types: dict[str, str], information: TypeInformation):
+    def __init__(self, resolution: NameResolution, return_types: dict[str, CType], information: TypeInformation):
         self.resolution = resolution
         self.return_types = return_types
         self.information = information
@@ -74,21 +61,21 @@ class _Inference:
             else:
                 self.walk_statement(child)
 
-    def type_of(self, node) -> str:
+    def type_of(self, node) -> CType:
         record = self.information._record
 
         if isinstance(node, StringConst):
-            return record(node, "text")
+            return record(node, CType.TEXT)
 
         if isinstance(node, Const):
-            return record(node, DOUBLE if isinstance(node.value, float) else INT)
+            return record(node, CType.DOUBLE if isinstance(node.value, float) else CType.INT)
 
         if isinstance(node, Group):
             return record(node, self.type_of(node.expression))
 
         if isinstance(node, (Id, Assign, CompoundAssign, IncDec)):
             declaration = self.resolution.declaration_for(node)
-            declared = declaration.type if declaration is not None else INT # type: ignore
+            declared = declaration.type if declaration is not None else CType.INT # type: ignore
             if isinstance(node, (Assign, CompoundAssign)):
                 self.type_of(node.value)
             if isinstance(node, CompoundAssign):
@@ -98,38 +85,38 @@ class _Inference:
         if isinstance(node, Call):
             for argument in node.arguments:
                 self.type_of(argument)
-            return record(node, self.return_types.get(node.name, INT))
+            return record(node, self.return_types.get(node.name, CType.INT))
 
         if isinstance(node, UnaryOp):
             operand = self.type_of(node.operand)
             if node.operator == "!":
-                return record(node, INT)
-            if node.operator == "~" and operand == DOUBLE:
+                return record(node, CType.INT)
+            if node.operator == "~" and operand == CType.DOUBLE:
                 raise SemanticError(f"{_at(node)}оператор '~' не застосовується до double")
             return record(node, operand)
 
         if isinstance(node, LogicalOp):
             self.type_of(node.left)
             self.type_of(node.right)
-            return record(node, INT)
+            return record(node, CType.INT)
 
         if isinstance(node, Ternary):
             self.type_of(node.condition)
             branches = (self.type_of(node.if_true), self.type_of(node.if_false))
-            return record(node, DOUBLE if DOUBLE in branches else INT)
+            return record(node, CType.DOUBLE if CType.DOUBLE in branches else CType.INT)
 
         if isinstance(node, BinOp):
             left = self.type_of(node.left)
             right = self.type_of(node.right)
             self._check_operand_types(node, node.operator, left, right)
             if node.operator in COMPARISON_OPERATORS:
-                return record(node, INT)
-            return record(node, DOUBLE if DOUBLE in (left, right) else INT)
+                return record(node, CType.INT)
+            return record(node, CType.DOUBLE if CType.DOUBLE in (left, right) else CType.INT)
 
         raise TypeError(f"Немає правила виведення типу для вузла {type(node).__name__}")
 
-    def _check_operand_types(self, node, operator: str, left: str, right: str) -> None:
-        if operator in INTEGER_ONLY_OPERATORS and DOUBLE in (left, right):
+    def _check_operand_types(self, node, operator: str, left: CType, right: CType) -> None:
+        if operator in INTEGER_ONLY_OPERATORS and CType.DOUBLE in (left, right):
             raise SemanticError(
                 f"{_at(node)}оператор '{operator}' не застосовується до double"
             )
