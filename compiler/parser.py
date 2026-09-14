@@ -4,7 +4,7 @@ import ply.yacc as yacc
 
 from lexer import tokens, build_lexer
 from errors import SemanticError, SyntaxErrorAtLine
-from constants import ArrayType, COMPOUND_ASSIGN_OPERATORS, CType
+from constants import ArrayType, ValueType, COMPOUND_ASSIGN_OPERATORS, CType
 from ast_nodes import (
     Group, Program, VarDecl, Param, FuncDecl, FuncProto, Block, If, While, For,
     DoWhile, Break, Continue, Return, Print, ExprStmt, Assign, CompoundAssign,
@@ -127,14 +127,14 @@ def p_var_declaration(p):
         if length is not None:
             if is_const:
                 raise SemanticError(f"Рядок {line}: масив '{name}' не може бути const")
-            declared: object = ArrayType(type_name, length)
+            declared: ValueType = ArrayType(type_name, length)
         else:
             declared = type_name
             if is_const and value is None:
                 raise SemanticError(
                     f"Рядок {line}: константу '{name}' треба ініціалізувати при оголошенні"
                 )
-        declarations.append(VarDecl(declared, name, value, is_const=is_const, line=line)) # type: ignore
+        declarations.append(VarDecl(declared, name, value, is_const=is_const, line=line))
     p[0] = declarations
 
 

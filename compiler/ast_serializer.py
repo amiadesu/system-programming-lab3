@@ -62,9 +62,7 @@ def _child_nodes(node) -> list[tuple[str, object]]:
     return children
 
 
-def ast_to_dict(node, role: str | None = None) -> dict | None:
-    if node is None:
-        return None
+def ast_to_dict(node, role: str | None = None) -> dict:
     return {
         "type": type(node).__name__,
         "label": _node_label(node),

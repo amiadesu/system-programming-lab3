@@ -21,7 +21,7 @@ from pipeline import CompilationContext, run_pipeline
 
 @dataclass
 class TranslationResult:
-    ast: dict | None
+    ast: dict
     python_code: str
     reconstructed_source: str
     codegen_error: str | None
@@ -32,15 +32,21 @@ class TranslationResult:
 
 def translate(source_code: str) -> TranslationResult:
     context = run_pipeline(source_code)
+    # `run_pipeline` either fills every field in or raises, so from here on the
+    # artifacts are all present.
+    assert context.ast is not None
+    assert context.python_code is not None
+    assert context.reconstructed_source is not None
+    assert context.analysis is not None
 
     execution_output, execution_error = _interpret(context)
 
     return TranslationResult(
         ast=ast_to_dict(context.ast),
-        python_code=context.python_code, # type: ignore
-        reconstructed_source=context.reconstructed_source, # type: ignore
-        codegen_error=_check_generated_python(context.python_code), # type: ignore
-        warnings=context.analysis.warnings, # type: ignore
+        python_code=context.python_code,
+        reconstructed_source=context.reconstructed_source,
+        codegen_error=_check_generated_python(context.python_code),
+        warnings=context.analysis.warnings,
         execution_output=execution_output,
         execution_error=execution_error,
     )
