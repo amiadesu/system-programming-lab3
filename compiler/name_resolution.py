@@ -22,6 +22,7 @@ import keyword
 from dataclasses import dataclass, field
 
 from ast_nodes import (
+    Index,
     Assign, Block, Break, Call, CompoundAssign, Continue, DoWhile, ExprStmt,
     For, FuncDecl, StringConst, FuncProto, Id, If, IncDec, Print, Program, Return, VarDecl,
     While, expression_children,
@@ -278,7 +279,11 @@ def _bind_global_initializer(
         )
     if isinstance(node, StringConst):
         return
-    if isinstance(node, (Id, Assign, CompoundAssign, IncDec)):
+    if isinstance(node, (Assign, CompoundAssign, IncDec)):
+        raise SemanticError(
+            f"{_at(node)}ініціалізатор глобальної змінної не може змінювати змінні"
+        )
+    if isinstance(node, Id):
         if node.name not in global_names:
             raise SemanticError(
                 f"{_at(node)}ініціалізатор глобальної змінної посилається на "
@@ -341,13 +346,24 @@ def _bind_statement(node, binder: _Binder) -> None:
         raise TypeError(f"Невідомий вузол оператора {type(node).__name__}")
 
 
+def _bind_target(node, binder: _Binder) -> None:
+    """
+    Binds the target of an assignment.
+    """
+    if isinstance(node, Index):
+        binder.use(node.base, node.base.name, is_assignment=True) # type: ignore
+        _bind_expression(node.index, binder)
+        return
+    binder.use(node, node.name, is_assignment=True)
+
+
 def _bind_expression(node, binder: _Binder) -> None:
     if isinstance(node, (Assign, CompoundAssign)):
         _bind_expression(node.value, binder)
-        binder.use(node, node.name, is_assignment=True)
+        _bind_target(node.target, binder)
         return
     if isinstance(node, IncDec):
-        binder.use(node, node.name, is_assignment=True)
+        _bind_target(node.target, binder)
         return
     if isinstance(node, Id):
         binder.use(node, node.name, is_assignment=False)

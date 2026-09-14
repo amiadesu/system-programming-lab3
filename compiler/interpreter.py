@@ -5,33 +5,103 @@ import sys
 from functools import singledispatch
 
 from ast_nodes import (
+    Index, SizeOfType, SizeOfExpr,
     Group, Program, VarDecl, FuncDecl, Block, If, While, For, DoWhile, Break,
     Continue, Return, Print, ExprStmt, Assign, CompoundAssign, IncDec, BinOp,
     LogicalOp, UnaryOp, Ternary, Call, Id, Const, StringConst,
 )
-from constants import CType, DOUBLE_OUTPUT_PRECISION, ENTRY_POINT, MAX_CALL_DEPTH, MAX_STEPS
-from errors import ExecutionLimitExceeded, RuntimeErrorInProgram, SemanticError
+from constants import ArrayType, ValueType, CType, DOUBLE_OUTPUT_PRECISION, ENTRY_POINT, MAX_CALL_DEPTH, MAX_STEPS
+from errors import error_prefix, ExecutionLimitExceeded, RuntimeErrorInProgram, SemanticError
 
 # Each interpreted C call costs several Python frames, so the default limit of
 # 1000 would be hit long before MAX_CALL_DEPTH.
 sys.setrecursionlimit(20_000)
 
 
-def convert(value, type_name: CType):
+Value = int | float | list
+
+
+def convert(value: Value, type_name: ValueType) -> Value:
     """
     Applies a C conversion to `value` on its way into a slot of `type_name`.
     Assignment, parameter passing and `return` all convert: a double stored in
     an int is truncated toward zero, an int stored in a double widens.
     """
+    if isinstance(type_name, ArrayType):
+        # An array is passed and stored by reference; there is nothing to
+        # convert, and converting would copy it.
+        return value
+    if isinstance(value, list):
+        raise RuntimeErrorInProgram("масив не можна перетворити на число")
     if type_name == CType.DOUBLE:
         return float(value)
     return int(value)  # int() truncates toward zero, as C does
 
 
-def format_value(value) -> str:
+def new_array(array_type: ArrayType) -> list:
+    """A freshly declared array. C leaves it uninitialised; we start at zero,
+    the same as a scalar without an initialiser."""
+    zero = 0.0 if array_type.element == CType.DOUBLE else 0
+    return [zero] * (array_type.length or 0)
+
+
+def number_operand(node, value: Value) -> int | float:
+    """
+    A value used as a number.
+
+    An array can only reach a numeric position if an earlier pass let it
+    through, so this reports that as a program error rather than letting Python
+    raise something unrecognisable.
+    """
+    if isinstance(value, list):
+        raise RuntimeErrorInProgram(
+            f"{error_prefix(node)}масив не можна використати як окреме значення"
+        )
+    return value
+
+
+def array_operand(node, value: Value) -> list:
+    """
+    The list a subscript applies to.
+
+    Type inference has already proved the base is an array; narrowing it again
+    here keeps that fact visible to a reader and to a type checker, and turns a
+    bug in an earlier pass into a clear message instead of a Python TypeError.
+    """
+    if not isinstance(value, list):
+        raise RuntimeErrorInProgram(f"{error_prefix(node)}індексувати можна лише масив")
+    return value
+
+
+def subscript_value(node, value: Value) -> int:
+    """The integer a subscript evaluates to; inference has already checked it."""
+    if not isinstance(value, int):
+        raise RuntimeErrorInProgram(f"{error_prefix(node)}індекс масиву має бути цілим")
+    return value
+
+
+def checked_index(container: list, index: int, node) -> int:
+    """
+    Validates a subscript.
+
+    C does not check, and reading out of bounds is undefined; Python would
+    silently wrap a negative index round to the end and raise only past the
+    top. Neither is reproducible, so both back ends refuse instead.
+    """
+    if index < 0 or index >= len(container):
+        raise RuntimeErrorInProgram(
+            f"{error_prefix(node)}індекс {index} поза межами масиву "
+            f"довжини {len(container)}"
+        )
+    return index
+
+
+def format_value(value: Value) -> str:
     """Renders a value the way `print` shows it."""
     if isinstance(value, float):
         return f"{value:.{DOUBLE_OUTPUT_PRECISION}f}"
+    if isinstance(value, list):
+        raise RuntimeErrorInProgram("масив не можна надрукувати як число")
     return str(int(value))
 
 
@@ -96,22 +166,28 @@ class Scope:
     """One lexical scope: a function call frame or a `{ ... }` block."""
 
     def __init__(self, parent: "Scope | None" = None):
-        self.variables: dict[str, object] = {}
-        self.types: dict[str, CType] = {}
+        self.variables: dict[str, Value] = {}
+        self.types: dict[str, ValueType] = {}
         self.parent = parent
 
-    def declare(self, name: str, value, type_name: CType = CType.INT) -> None:
+    def declare(self, name: str, value: Value, type_name: ValueType = CType.INT) -> None:
         """Introduces `name` in *this* scope, shadowing any outer one."""
         if name in self.variables:
             raise SemanticError(f"Повторне оголошення змінної '{name}'")
         self.types[name] = type_name
         self.variables[name] = convert(value, type_name)
 
-    def get(self, name: str) -> int:
+    def type_of(self, name: str) -> ValueType:
         scope = self._find(name)
         if scope is None:
             raise RuntimeErrorInProgram(f"Використання неоголошеної змінної '{name}'")
-        return scope.variables[name] # type: ignore
+        return scope.types[name]
+
+    def get(self, name: str) -> Value:
+        scope = self._find(name)
+        if scope is None:
+            raise RuntimeErrorInProgram(f"Використання неоголошеної змінної '{name}'")
+        return scope.variables[name]
 
     def set(self, name: str, value) -> None:
         scope = self._find(name)
@@ -154,6 +230,9 @@ class Interpreter:
             if isinstance(declaration, VarDecl):
                 _execute_statement(declaration, self._global_scope, self)
 
+    def size_of(self, node) -> int:
+        return self._types.size_of(node) # type: ignore
+
     def type_of(self, node) -> str:
         return self._types.type_of(node) if self._types is not None else CType.INT
 
@@ -165,14 +244,14 @@ class Interpreter:
                 "ймовірно, програма зациклилась"
             )
 
-    def run(self, entry_point: str = ENTRY_POINT) -> int:
+    def run(self, entry_point: str = ENTRY_POINT) -> Value:
         if entry_point not in self._functions:
             raise SemanticError(f"У програмі немає функції '{entry_point}'")
         if self._functions[entry_point].params:
             raise SemanticError(f"Функція '{entry_point}' не повинна мати параметрів")
         return self.call_function(entry_point, [])
 
-    def call_function(self, name: str, argument_values: list[int]) -> int:
+    def call_function(self, name: str, argument_values: list[Value]) -> Value:
         function = self._functions.get(name)
         if function is None:
             raise RuntimeErrorInProgram(f"Виклик неоголошеної функції '{name}'")
@@ -195,7 +274,7 @@ class Interpreter:
         try:
             _execute_statement(function.body, scope, self)
         except _ReturnSignal as signal:
-            return convert(signal.value, function.return_type) if function.return_type != CType.VOID else 0 # type: ignore
+            return convert(signal.value, function.return_type) if function.return_type != CType.VOID else 0
         finally:
             self._depth -= 1
         return 0
@@ -216,6 +295,9 @@ def _execute_block(node: Block, scope: Scope, interpreter: Interpreter) -> None:
 
 @_execute_statement.register(VarDecl)
 def _execute_var_decl(node: VarDecl, scope: Scope, interpreter: Interpreter) -> None:
+    if isinstance(node.type, ArrayType):
+        scope.declare(node.name, new_array(node.type), node.type)
+        return
     value = _evaluate_expression(node.value, scope, interpreter) if node.value is not None else 0
     scope.declare(node.name, value, node.type)
 
@@ -305,34 +387,93 @@ def _execute_return(node: Return, scope: Scope, interpreter: Interpreter) -> Non
 
 
 @singledispatch
-def _evaluate_expression(node, scope: Scope, interpreter: Interpreter) -> int:
+def _evaluate_expression(node, scope: Scope, interpreter: Interpreter) -> Value:
     raise TypeError(f"No interpreter rule for expression node {type(node).__name__}")
 
 
 @_evaluate_expression.register(Const)
-def _evaluate_const(node: Const, scope: Scope, interpreter: Interpreter) -> int:
-    return node.value # type: ignore
+def _evaluate_const(node: Const, scope: Scope, interpreter: Interpreter) -> Value:
+    return node.value
 
 
 @_evaluate_expression.register(Id)
-def _evaluate_id(node: Id, scope: Scope, interpreter: Interpreter) -> int:
+def _evaluate_id(node: Id, scope: Scope, interpreter: Interpreter) -> Value:
     return scope.get(node.name)
 
 
 @_evaluate_expression.register(Group)
-def _evaluate_group(node: Group, scope: Scope, interpreter: Interpreter) -> int:
+def _evaluate_group(node: Group, scope: Scope, interpreter: Interpreter) -> Value:
     return _evaluate_expression(node.expression, scope, interpreter)
 
 
+def _resolve_target(node, scope: Scope, interpreter: Interpreter):
+    """
+    Locates what an assignment writes to, evaluating any subscript exactly once.
+
+    Returns a pair of functions, so `a[f()] += 1` calls `f` a single time just
+    as C requires.
+    """
+    if isinstance(node, Index):
+        base = node.base
+        assert isinstance(base, Id)  # the grammar allows nothing else as a base
+        container = array_operand(base, _evaluate_expression(base, scope, interpreter))
+        index = checked_index(
+            container,
+            subscript_value(node.index, _evaluate_expression(node.index, scope, interpreter)),
+            node,
+        )
+        declared = scope.type_of(base.name)
+        element_type = declared.element if isinstance(declared, ArrayType) else CType.INT
+
+        def read() -> Value:
+            return container[index]
+
+        def write(value: Value) -> Value:
+            container[index] = convert(value, element_type)
+            return container[index]
+
+        return read, write
+
+    assert isinstance(node, Id)  # the only other lvalue the grammar produces
+    name = node.name
+
+    def read_name() -> Value:
+        return scope.get(name)
+
+    def write_name(value: Value) -> Value:
+        scope.set(name, value)
+        return scope.get(name)
+
+    return read_name, write_name
+
+
+@_evaluate_expression.register(Index)
+def _evaluate_index(node: Index, scope: Scope, interpreter: Interpreter) -> Value:
+    container = array_operand(node.base, _evaluate_expression(node.base, scope, interpreter))
+    index = subscript_value(node.index, _evaluate_expression(node.index, scope, interpreter))
+    return container[checked_index(container, index, node)]
+
+
+@_evaluate_expression.register(SizeOfType)
+def _evaluate_sizeof_type(node: SizeOfType, scope: Scope, interpreter: Interpreter) -> int:
+    return interpreter.size_of(node)
+
+
+@_evaluate_expression.register(SizeOfExpr)
+def _evaluate_sizeof_expr(node: SizeOfExpr, scope: Scope, interpreter: Interpreter) -> int:
+    # The operand is deliberately not evaluated: `sizeof` looks at its type.
+    return interpreter.size_of(node)
+
+
 @_evaluate_expression.register(Assign)
-def _evaluate_assign(node: Assign, scope: Scope, interpreter: Interpreter) -> int:
+def _evaluate_assign(node: Assign, scope: Scope, interpreter: Interpreter) -> Value:
     value = _evaluate_expression(node.value, scope, interpreter)
-    scope.set(node.name, value)
-    return value
+    _, write = _resolve_target(node.target, scope, interpreter)
+    return write(value)
 
 
 @_evaluate_expression.register(BinOp)
-def _evaluate_binop(node: BinOp, scope: Scope, interpreter: Interpreter) -> int:
+def _evaluate_binop(node: BinOp, scope: Scope, interpreter: Interpreter) -> Value:
     interpreter.count_step()
     left = _evaluate_expression(node.left, scope, interpreter)
     right = _evaluate_expression(node.right, scope, interpreter)
@@ -340,7 +481,7 @@ def _evaluate_binop(node: BinOp, scope: Scope, interpreter: Interpreter) -> int:
 
 
 @_evaluate_expression.register(UnaryOp)
-def _evaluate_unary(node: UnaryOp, scope: Scope, interpreter: Interpreter) -> int:
+def _evaluate_unary(node: UnaryOp, scope: Scope, interpreter: Interpreter) -> Value:
     value = _evaluate_expression(node.operand, scope, interpreter)
     return UNARY_OPERATORS[node.operator](value)
 
@@ -364,8 +505,8 @@ def _evaluate_logical(node: LogicalOp, scope: Scope, interpreter: Interpreter) -
     return int(bool(_evaluate_expression(node.right, scope, interpreter)))
 
 
-@_evaluate_expression.register(Ternary) # type: ignore
-def _evaluate_ternary(node: Ternary, scope: Scope, interpreter: Interpreter):
+@_evaluate_expression.register(Ternary)
+def _evaluate_ternary(node: Ternary, scope: Scope, interpreter: Interpreter) -> Value:
     interpreter.count_step()
     branch = node.if_true if _evaluate_expression(node.condition, scope, interpreter) else node.if_false
     value = _evaluate_expression(branch, scope, interpreter)
@@ -373,23 +514,21 @@ def _evaluate_ternary(node: Ternary, scope: Scope, interpreter: Interpreter):
 
 
 @_evaluate_expression.register(CompoundAssign)
-def _evaluate_compound_assign(node: CompoundAssign, scope: Scope, interpreter: Interpreter) -> int:
-    current = scope.get(node.name)
+def _evaluate_compound_assign(node: CompoundAssign, scope: Scope, interpreter: Interpreter) -> Value:
+    read, write = _resolve_target(node.target, scope, interpreter)
     operand = _evaluate_expression(node.value, scope, interpreter)
-    value = BINARY_OPERATORS[node.operator](current, operand)
-    scope.set(node.name, value)
-    return value
+    return write(BINARY_OPERATORS[node.operator](read(), operand))
 
 
 @_evaluate_expression.register(IncDec)
-def _evaluate_inc_dec(node: IncDec, scope: Scope, interpreter: Interpreter) -> int:
-    previous = scope.get(node.name)
-    value = previous + 1 if node.operator == "+" else previous - 1
-    scope.set(node.name, value)
-    return scope.get(node.name) if node.is_prefix else previous
+def _evaluate_inc_dec(node: IncDec, scope: Scope, interpreter: Interpreter) -> Value:
+    read, write = _resolve_target(node.target, scope, interpreter)
+    previous = number_operand(node.target, read())
+    updated = write(previous + 1 if node.operator == "+" else previous - 1)
+    return updated if node.is_prefix else previous
 
 
 @_evaluate_expression.register(Call)
-def _evaluate_call(node: Call, scope: Scope, interpreter: Interpreter) -> int:
+def _evaluate_call(node: Call, scope: Scope, interpreter: Interpreter) -> Value:
     argument_values = [_evaluate_expression(arg, scope, interpreter) for arg in node.arguments]
     return interpreter.call_function(node.name, argument_values)

@@ -4,12 +4,13 @@ Translation of the AST into Python source text.
 from functools import singledispatch
 
 from ast_nodes import (
+    Index, SizeOfType, SizeOfExpr,
     Group, Program, VarDecl, FuncDecl, FuncProto, Block, If, While, For,
     DoWhile, Break, Continue, Return, Print, ExprStmt, Assign, CompoundAssign,
     IncDec, BinOp, LogicalOp, UnaryOp, Ternary, Call, Id, Const, StringConst,
 )
 from constants import (
-    COMPARISON_OPERATORS, CType, Precedence, BINARY_LEVELS, INDENT_UNIT, PREAMBLE, DOUBLE_OUTPUT_PRECISION
+    COMPARISON_OPERATORS, CType, Precedence, BINARY_LEVELS, INDENT_UNIT, MATH_IMPORT, ARRAY_HELPERS, ArrayType, ValueType, DOUBLE_OUTPUT_PRECISION
 )
 from name_resolution import NameResolution, resolve_names
 from type_inference import TypeInformation, infer_types
@@ -24,7 +25,12 @@ def generate_python(
     types = types if types is not None else infer_types(program, resolution)
     context = _Context(resolution, types, program)
     body = _generate_statement(program, 0, context)
-    preamble = PREAMBLE if context.uses_math else ""
+    parts = []
+    if context.uses_math:
+        parts.append(MATH_IMPORT)
+    if context.uses_arrays:
+        parts.append(ARRAY_HELPERS)
+    preamble = "\n".join(parts) + "\n" if parts else ""
     return preamble + body
 
 
@@ -42,6 +48,7 @@ class _Context:
         }
         self.current_return_type = CType.INT
         self.uses_math = False
+        self.uses_arrays = False
         self.current_function: str | None = None
         self.continue_prelude: list = []
 
@@ -50,6 +57,9 @@ class _Context:
 
     def name_of_function(self, c_name: str) -> str:
         return self.resolution.name_of_function(c_name)
+
+    def size_of(self, node) -> int:
+        return self.types.size_of(node)
 
     def type_of(self, node) -> str:
         return self.types.type_of(node)
@@ -121,6 +131,9 @@ def _generate_func_proto(node: FuncProto, indent: int, context: _Context) -> str
 @_generate_statement.register(VarDecl)
 def _generate_var_decl(node: VarDecl, indent: int, context: _Context) -> str:
     name = context.name_of(node)
+    if isinstance(node.type, ArrayType):
+        zero = "0.0" if node.type.element == CType.DOUBLE else "0"
+        return f"{_pad(indent)}{name} = [{zero}] * {node.type.length}\n"
     if node.value is not None:
         return f"{_pad(indent)}{name} = {_converted(node.value, node.type, context)}\n"
     return f"{_pad(indent)}{name} = {'0.0' if node.type == CType.DOUBLE else '0'}\n"
@@ -224,11 +237,11 @@ def _generate_expr_stmt(node: ExprStmt, indent: int, context: _Context) -> str:
     inner = node.expression
 
     if isinstance(inner, Assign):
-        target = context.name_of(inner)
+        target = _target_text(inner.target, context)
         return f"{_pad(indent)}{target} = {_converted(inner.value, CType(context.type_of(inner)), context)}\n"
 
     if isinstance(inner, CompoundAssign):
-        target = context.name_of(inner)
+        target = _target_text(inner.target, context)
         target_type = CType(context.type_of(inner))
         combined = _compound_value(inner, target, target_type, context)
         if combined is not None:
@@ -237,10 +250,25 @@ def _generate_expr_stmt(node: ExprStmt, indent: int, context: _Context) -> str:
         return f"{_pad(indent)}{target} {inner.operator}= {value}\n"
 
     if isinstance(inner, IncDec):
-        target = context.name_of(inner)
+        target = _target_text(inner.target, context)
         return f"{_pad(indent)}{target} {inner.operator}= 1\n"
 
     return f"{_pad(indent)}{_expression(inner, Precedence.DEFAULT_MINIMUM, context)}\n"
+
+
+def _target_text(node, context: _Context) -> str:
+    """
+    Renders an assignment target as something Python can assign to.
+
+    A subscript keeps its bounds check, so the generated code refuses the same
+    indices the interpreter refuses.
+    """
+    if isinstance(node, Index):
+        context.uses_arrays = True
+        base = context.name_of(node.base)
+        index = _expression(node.index, Precedence.INSIDE_PARENTHESES, context)
+        return f"{base}[_bound({base}, {index})]"
+    return context.name_of(node)
 
 
 def _yields_bool(node) -> bool:
@@ -265,7 +293,7 @@ def _yields_bool(node) -> bool:
     return False
 
 
-def _converted(node, target_type: CType, context: _Context) -> str:
+def _converted(node, target_type: ValueType, context: _Context) -> str:
     """
     Renders `node` for a slot of `target_type`, applying the C conversion.
 
@@ -366,9 +394,19 @@ def _generate_group_expr(node: Group, context: _Context) -> tuple[str, int]:
 
 @_generate_expression.register(Assign)
 def _generate_assign_expr(node: Assign, context: _Context) -> tuple[str, int]:
-    target = context.name_of(node)
     value = _converted(node.value, CType(context.type_of(node)), context)
-    return f"{target} := {value}", Precedence.WALRUS
+    if isinstance(node.target, Index):
+        # The walrus operator only takes a plain name, so assigning to an
+        # element inside an expression goes through a helper instead.
+        return _store_call(node.target, value, context), Precedence.ATOM
+    return f"{context.name_of(node.target)} := {value}", Precedence.WALRUS
+
+
+def _store_call(target: Index, value: str, context: _Context) -> str:
+    context.uses_arrays = True
+    base = context.name_of(target.base)
+    index = _expression(target.index, Precedence.INSIDE_PARENTHESES, context)
+    return f"_store({base}, {index}, {value})"
 
 
 @_generate_expression.register(BinOp)
@@ -416,23 +454,34 @@ def _generate_ternary_expr(node: Ternary, context: _Context) -> tuple[str, int]:
 
 @_generate_expression.register(CompoundAssign)
 def _generate_compound_assign_expr(node: CompoundAssign, context: _Context) -> tuple[str, int]:
-    target = context.name_of(node)
+    target = _target_text(node.target, context)
     target_type = CType(context.type_of(node))
     value = _compound_value(node, target, target_type, context)
     if value is None:
         _, right_level = BINARY_LEVELS[node.operator]
         value = f"{target} {node.operator} {_expression(node.value, right_level, context)}"
+    if isinstance(node.target, Index):
+        return _store_call(node.target, value, context), Precedence.ATOM
     return f"{target} := {value}", Precedence.WALRUS
 
 
 @_generate_expression.register(IncDec)
 def _generate_inc_dec_expr(node: IncDec, context: _Context) -> tuple[str, int]:
-    target = context.name_of(node)
-    updated = f"{target} := {target} {node.operator} 1"
-    if node.is_prefix:
-        return updated, Precedence.WALRUS
+    target = _target_text(node.target, context)
     undo = "-" if node.operator == "+" else "+"
-    return f"({updated}) {undo} 1", Precedence.ADDITIVE
+
+    if isinstance(node.target, Index):
+        updated = _store_call(node.target, f"{target} {node.operator} 1", context)
+        level = Precedence.ATOM
+    else:
+        updated = f"{target} := {target} {node.operator} 1"
+        level = Precedence.WALRUS
+
+    if node.is_prefix:
+        return updated, level
+    # The postfix form yields the old value, recovered by undoing the step.
+    bracketed = updated if level == Precedence.ATOM else f"({updated})"
+    return f"{bracketed} {undo} 1", Precedence.ADDITIVE
 
 
 @_generate_expression.register(UnaryOp)
@@ -453,6 +502,25 @@ def _generate_call_expr(node: Call, context: _Context) -> tuple[str, int]:
         for index, argument in enumerate(node.arguments)
     )
     return f"{context.name_of_function(node.name)}({args})", Precedence.ATOM
+
+
+@_generate_expression.register(Index)
+def _generate_index_expr(node: Index, context: _Context) -> tuple[str, int]:
+    context.uses_arrays = True
+    base = context.name_of(node.base)
+    index = _expression(node.index, Precedence.INSIDE_PARENTHESES, context)
+    return f"{base}[_bound({base}, {index})]", Precedence.ATOM
+
+
+@_generate_expression.register(SizeOfType)
+def _generate_sizeof_type_expr(node: SizeOfType, context: _Context) -> tuple[str, int]:
+    return str(context.size_of(node)), Precedence.ATOM
+
+
+@_generate_expression.register(SizeOfExpr)
+def _generate_sizeof_expr(node: SizeOfExpr, context: _Context) -> tuple[str, int]:
+    # `sizeof` is decided at compile time, so the operand produces no code.
+    return str(context.size_of(node)), Precedence.ATOM
 
 
 @_generate_expression.register(Id)

@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ast_nodes import (
+    Index, SizeOfType, SizeOfExpr,
     Block, Break, Call, Const, Continue, DoWhile, ExprStmt, For, FuncDecl,
     FuncProto, Group, Id, If, IncDec, Print, Program, Return, StringConst,
     UnaryOp, VarDecl, While, expression_children,
@@ -233,7 +234,7 @@ def _check_expression(node, functions: dict[str, FuncDecl], result: AnalysisResu
     if isinstance(node, Call):
         _check_call(node, functions, expects_value=True)
 
-    if isinstance(node, (Id, IncDec, StringConst)):
+    if isinstance(node, (Id, StringConst)):
         return
 
     for child in expression_children(node):

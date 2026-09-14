@@ -4,12 +4,13 @@ Renders an AST back as C source text.
 from functools import singledispatch
 
 from ast_nodes import (
+    Index, SizeOfType, SizeOfExpr,
     Assign, BinOp, Block, Break, Call, CompoundAssign, Const, Continue,
     DoWhile, ExprStmt, For, FuncDecl, FuncProto, Group, Id, If, IncDec,
     LogicalOp, Print, Program, Return, StringConst, Ternary, UnaryOp, VarDecl,
     While,
 )
-from constants import ESCAPE_SEQUENCES, INDENT_UNIT
+from constants import ArrayType, ESCAPE_SEQUENCES, INDENT_UNIT
 
 # Inverse of the lexer's table, for putting escapes back into a literal.
 _ESCAPE_BACK = {character: escape for escape, character in ESCAPE_SEQUENCES.items()}
@@ -26,6 +27,10 @@ def _pad(indent: int) -> str:
 
 def _declaration_head(node) -> str:
     qualifier = "const " if getattr(node, "is_const", False) else ""
+    if isinstance(node.type, ArrayType):
+        # C writes the size after the name: `int a[10]`, not `int[10] a`.
+        length = node.type.length if node.type.length is not None else ""
+        return f"{node.type.element} {node.name}[{length}]"
     return f"{qualifier}{node.type} {node.name}"
 
 
@@ -190,23 +195,42 @@ def _print_ternary(node: Ternary) -> str:
 
 @_expression.register(Assign)
 def _print_assign(node: Assign) -> str:
-    return f"{node.name} = {_expression(node.value)}"
+    return f"{_expression(node.target)} = {_expression(node.value)}"
 
 
 @_expression.register(CompoundAssign)
 def _print_compound_assign(node: CompoundAssign) -> str:
-    return f"{node.name} {node.operator}= {_expression(node.value)}"
+    return f"{_expression(node.target)} {node.operator}= {_expression(node.value)}"
 
 
 @_expression.register(IncDec)
 def _print_inc_dec(node: IncDec) -> str:
     step = node.operator * 2
-    return f"{step}{node.name}" if node.is_prefix else f"{node.name}{step}"
+    target = _expression(node.target)
+    return f"{step}{target}" if node.is_prefix else f"{target}{step}"
 
 
 @_expression.register(Call)
 def _print_call(node: Call) -> str:
     return f"{node.name}({', '.join(_expression(argument) for argument in node.arguments)})"
+
+
+@_expression.register(Index)
+def _print_index(node: Index) -> str:
+    return f"{_expression(node.base)}[{_expression(node.index)}]"
+
+
+@_expression.register(SizeOfType)
+def _print_sizeof_type(node: SizeOfType) -> str:
+    return f"sizeof({node.type})"
+
+
+@_expression.register(SizeOfExpr)
+def _print_sizeof_expr(node: SizeOfExpr) -> str:
+    operand = _expression(node.operand)
+    # `sizeof(a)` came through as a Group, so the space would look wrong.
+    separator = "" if operand.startswith("(") else " "
+    return f"sizeof{separator}{operand}"
 
 
 @_expression.register(Id)
