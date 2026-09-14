@@ -6,6 +6,8 @@ the generated Python would otherwise quietly disagree:
 
 * a non-void function must return a value on every path, and a void one must
   not return a value at all;
+* every call must name a declared function and pass the right number of
+  arguments;
 * the result of a void function may not be used as a value;
 * integer literals outside the 32-bit range are reported as warnings, because
   the generated code routes `/` and `%` through floating point and is only
@@ -27,6 +29,12 @@ INT32_MIN = -(2 ** 31)
 INT32_MAX = 2 ** 31 - 1
 
 
+def _at(node) -> str:
+    """Source position prefix for an error message, when the node has one."""
+    line = getattr(node, "line", None)
+    return f"Рядок {line}: " if line else ""
+
+
 @dataclass
 class AnalysisResult:
     warnings: list[str] = field(default_factory=list)
@@ -34,8 +42,8 @@ class AnalysisResult:
 
 def analyse(program: Program) -> AnalysisResult:
     result = AnalysisResult()
-    return_types = {
-        declaration.name: declaration.return_type
+    functions = {
+        declaration.name: declaration
         for declaration in program.declarations
         if isinstance(declaration, FuncDecl)
     }
@@ -43,14 +51,15 @@ def analyse(program: Program) -> AnalysisResult:
     for declaration in program.declarations:
         if isinstance(declaration, VarDecl):
             if declaration.value is not None:
-                _check_expression(declaration.value, return_types, result)
+                _check_expression(declaration.value, functions, result)
             continue
 
-        _check_statement(declaration.body, declaration, return_types, result)
+        _check_statement(declaration.body, declaration, functions, result)
         if declaration.return_type != "void" and not _always_returns(declaration.body):
             raise SemanticError(
-                f"Функція '{declaration.name}' має тип {declaration.return_type}, "
-                "але не повертає значення на всіх шляхах виконання"
+                f"{_at(declaration)}функція '{declaration.name}' має тип "
+                f"{declaration.return_type}, але не повертає значення на всіх "
+                "шляхах виконання"
             )
 
     return result
@@ -85,54 +94,56 @@ def _is_constant_true(node) -> bool:
     return isinstance(node, Const) and node.value != 0
 
 
-def _check_statement(node, function: FuncDecl, return_types: dict[str, str], result: AnalysisResult) -> None:
+def _check_statement(node, function: FuncDecl, functions: dict[str, FuncDecl], result: AnalysisResult) -> None:
     if isinstance(node, Block):
         for statement in node.statements:
-            _check_statement(statement, function, return_types, result)
+            _check_statement(statement, function, functions, result)
     elif isinstance(node, If):
-        _check_expression(node.condition, return_types, result)
-        _check_statement(node.then_branch, function, return_types, result)
+        _check_expression(node.condition, functions, result)
+        _check_statement(node.then_branch, function, functions, result)
         if node.else_branch is not None:
-            _check_statement(node.else_branch, function, return_types, result)
+            _check_statement(node.else_branch, function, functions, result)
     elif isinstance(node, While):
-        _check_expression(node.condition, return_types, result)
-        _check_statement(node.body, function, return_types, result)
+        _check_expression(node.condition, functions, result)
+        _check_statement(node.body, function, functions, result)
     elif isinstance(node, VarDecl):
         if node.value is not None:
-            _check_expression(node.value, return_types, result)
+            _check_expression(node.value, functions, result)
     elif isinstance(node, Print):
-        _check_expression(node.value, return_types, result)
+        _check_expression(node.value, functions, result)
     elif isinstance(node, Return):
-        _check_return(node, function, return_types, result)
+        _check_return(node, function, functions, result)
     elif isinstance(node, ExprStmt):
         # The one position where a void call is legitimate: as a statement of
         # its own, with its value discarded.
         if isinstance(node.expression, Call):
+            _check_call(node.expression, functions, expects_value=False)
             for argument in node.expression.arguments:
-                _check_expression(argument, return_types, result)
+                _check_expression(argument, functions, result)
         else:
-            _check_expression(node.expression, return_types, result)
+            _check_expression(node.expression, functions, result)
     else:
         raise TypeError(f"Невідомий вузол оператора {type(node).__name__}")
 
 
-def _check_return(node: Return, function: FuncDecl, return_types: dict[str, str], result: AnalysisResult) -> None:
+def _check_return(node: Return, function: FuncDecl, functions: dict[str, FuncDecl], result: AnalysisResult) -> None:
     if function.return_type == "void":
         if node.value is not None:
             raise SemanticError(
-                f"Функція '{function.name}' має тип void і не може повертати значення"
+                f"{_at(node)}функція '{function.name}' має тип void "
+                "і не може повертати значення"
             )
         return
 
     if node.value is None:
         raise SemanticError(
-            f"Функція '{function.name}' має тип {function.return_type}, "
+            f"{_at(node)}функція '{function.name}' має тип {function.return_type}, "
             "тому 'return' має повертати значення"
         )
-    _check_expression(node.value, return_types, result)
+    _check_expression(node.value, functions, result)
 
 
-def _check_expression(node, return_types: dict[str, str], result: AnalysisResult) -> None:
+def _check_expression(node, functions: dict[str, FuncDecl], result: AnalysisResult) -> None:
     if isinstance(node, Const):
         _warn_if_outside_int32(node.value, result)
         return
@@ -144,16 +155,33 @@ def _check_expression(node, return_types: dict[str, str], result: AnalysisResult
             return
 
     if isinstance(node, Call):
-        if return_types.get(node.name) == "void":
-            raise SemanticError(
-                f"Функція '{node.name}' має тип void, її результат не можна використати як значення"
-            )
+        _check_call(node, functions, expects_value=True)
 
     if isinstance(node, Id):
         return
 
     for child in _expression_children(node):
-        _check_expression(child, return_types, result)
+        _check_expression(child, functions, result)
+
+
+def _check_call(node: Call, functions: dict[str, FuncDecl], expects_value: bool) -> None:
+    function = functions.get(node.name)
+    if function is None:
+        raise SemanticError(f"{_at(node)}виклик неоголошеної функції '{node.name}'")
+
+    expected = len(function.params)
+    given = len(node.arguments)
+    if expected != given:
+        raise SemanticError(
+            f"{_at(node)}функція '{node.name}' очікує {expected} аргумент(ів), "
+            f"передано {given}"
+        )
+
+    if expects_value and function.return_type == "void":
+        raise SemanticError(
+            f"{_at(node)}функція '{node.name}' має тип void, "
+            "її результат не можна використати як значення"
+        )
 
 
 def _unwrap_literal(node) -> int | None:

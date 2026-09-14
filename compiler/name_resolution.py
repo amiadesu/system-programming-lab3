@@ -27,6 +27,12 @@ from ast_nodes import (
 )
 from errors import SemanticError
 
+
+def _at(node) -> str:
+    """Source position prefix for an error message, when the node has one."""
+    line = getattr(node, "line", None)
+    return f"Рядок {line}: " if line else ""
+
 # Names the generated module uses itself and therefore may not be shadowed.
 RESERVED_NAMES = {"math"}
 
@@ -107,7 +113,7 @@ class _Binder:
 
     def declare(self, node, name: str, where: str) -> None:
         if name in self.scopes[-1]:
-            raise SemanticError(f"Повторне оголошення '{name}' {where}")
+            raise SemanticError(f"{_at(node)}повторне оголошення '{name}' {where}")
         self.visible_declarations[id(node)] = self.visible()
         self.scopes[-1][name] = node
         self.declarations.append(node)
@@ -119,7 +125,9 @@ class _Binder:
         self.all_names.add(name)
         if declaration is None:
             if name not in self.global_names:
-                raise SemanticError(f"Використання неоголошеної змінної '{name}'")
+                raise SemanticError(
+                    f"{_at(node)}використання неоголошеної змінної '{name}'"
+                )
             self.globals_used.add(name)
             if is_assignment and name not in self.assigned_globals:
                 self.assigned_globals.append(name)
@@ -167,10 +175,14 @@ def _name_module_level(program: Program, resolution: NameResolution) -> tuple[se
 
         if name in module_names:
             if is_function and name in function_names:
-                raise SemanticError(f"Повторне оголошення функції '{name}'")
+                raise SemanticError(f"{_at(declaration)}повторне оголошення функції '{name}'")
             if not is_function and name in global_names:
-                raise SemanticError(f"Повторне оголошення глобальної змінної '{name}'")
-            raise SemanticError(f"'{name}' оголошено і як змінну, і як функцію")
+                raise SemanticError(
+                    f"{_at(declaration)}повторне оголошення глобальної змінної '{name}'"
+                )
+            raise SemanticError(
+                f"{_at(declaration)}'{name}' оголошено і як змінну, і як функцію"
+            )
 
         python_name = _pick_name(name, taken)
         taken.add(python_name)
@@ -236,14 +248,14 @@ def _bind_global_initializer(
         # first - would happily run it. Forbidding the call keeps the two in
         # step regardless of declaration order.
         raise SemanticError(
-            "Ініціалізатор глобальної змінної не може викликати функції "
-            f"(виклик '{node.name}')"
+            f"{_at(node)}ініціалізатор глобальної змінної не може викликати "
+            f"функції (виклик '{node.name}')"
         )
     if isinstance(node, (Id, Assign)):
         if node.name not in global_names:
             raise SemanticError(
-                f"Ініціалізатор глобальної змінної посилається на '{node.name}', "
-                "яка не є глобальною змінною"
+                f"{_at(node)}ініціалізатор глобальної змінної посилається на "
+                f"'{node.name}', яка не є глобальною змінною"
             )
         resolution._record(node, module_names[node.name])
     for child in _expression_children(node):

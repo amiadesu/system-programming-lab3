@@ -1,3 +1,5 @@
+import functools
+
 import ply.yacc as yacc
 
 from lexer import tokens, build_lexer
@@ -6,6 +8,12 @@ from ast_nodes import (
     Group, Program, VarDecl, Param, FuncDecl, Block, If, While, Return, Print,
     ExprStmt, Assign, BinOp, UnaryOp, Call, Id, Const,
 )
+
+# PLY normally infers the start symbol from the rule defined first, ordering
+# rules by the line number of their function. `@_tracked` gives every rule the
+# decorator's own line number, so that inference no longer works and the start
+# symbol has to be named here.
+start = "program"
 
 precedence = (
     ("nonassoc", "LOWER_THAN_ELSE"),
@@ -19,6 +27,35 @@ precedence = (
 )
 
 
+def _line_of(production) -> int | None:
+    """
+    First source line covered by a production.
+    """
+    for position in range(1, len(production)):
+        line = production.lineno(position)
+        if line:
+            return line
+        span = production.linespan(position)
+        if span and span[0]:
+            return span[0]
+    return None
+
+
+def _tracked(rule):
+    """
+    Records the source line on the node a grammar rule produced.
+    """
+
+    @functools.wraps(rule)
+    def wrapper(production):
+        rule(production)
+        node = production[0]
+        if node is not None and getattr(node, "line", "missing") is None:
+            node.line = _line_of(production)
+
+    return wrapper
+
+
 def _reject_void_object(type_name: str, object_name: str, line: int) -> None:
     """`void` is a valid type specifier but not a valid type for storage."""
     if type_name == "void":
@@ -27,27 +64,32 @@ def _reject_void_object(type_name: str, object_name: str, line: int) -> None:
         )
 
 
+@_tracked
 def p_program(p):
     "program : declaration_list"
     p[0] = Program(p[1])
 
 
+@_tracked
 def p_declaration_list_single(p):
     "declaration_list : declaration"
     p[0] = [p[1]]
 
 
+@_tracked
 def p_declaration_list_multi(p):
     "declaration_list : declaration_list declaration"
     p[0] = p[1] + [p[2]]
 
 
+@_tracked
 def p_declaration(p):
     """declaration : var_declaration
                     | fun_declaration"""
     p[0] = p[1]
 
 
+@_tracked
 def p_var_declaration(p):
     """var_declaration : INT IDENTIFIER ';'
                         | VOID IDENTIFIER ';'"""
@@ -55,6 +97,7 @@ def p_var_declaration(p):
     p[0] = VarDecl(p[1], p[2])
 
 
+@_tracked
 def p_var_declaration_init(p):
     """var_declaration : INT IDENTIFIER '=' expression ';'
                        | VOID IDENTIFIER '=' expression ';'"""
@@ -62,37 +105,44 @@ def p_var_declaration_init(p):
     p[0] = VarDecl(p[1], p[2], p[4])
 
 
+@_tracked
 def p_fun_declaration(p):
     """fun_declaration : INT IDENTIFIER '(' params ')' compound_stmt
                         | VOID IDENTIFIER '(' params ')' compound_stmt"""
     p[0] = FuncDecl(p[1], p[2], p[4], p[6])
 
 
+@_tracked
 def p_params_empty(p):
     "params : "
     p[0] = []
 
 
+@_tracked
 def p_params_list(p):
     "params : param_list"
     p[0] = p[1]
 
 
+@_tracked
 def p_params_void(p):
     "params : VOID"
     p[0] = []
 
 
+@_tracked
 def p_param_list_single(p):
     "param_list : param"
     p[0] = [p[1]]
 
 
+@_tracked
 def p_param_list_multi(p):
     "param_list : param_list ',' param"
     p[0] = p[1] + [p[3]]
 
 
+@_tracked
 def p_param(p):
     """param : INT IDENTIFIER
               | VOID IDENTIFIER"""
@@ -100,31 +150,37 @@ def p_param(p):
     p[0] = Param(p[1], p[2])
 
 
+@_tracked
 def p_compound_stmt(p):
     "compound_stmt : '{' local_declarations statement_list '}'"
     p[0] = Block(p[2] + p[3])
 
 
+@_tracked
 def p_local_declarations_empty(p):
     "local_declarations : "
     p[0] = []
 
 
+@_tracked
 def p_local_declarations_multi(p):
     "local_declarations : local_declarations var_declaration"
     p[0] = p[1] + [p[2]]
 
 
+@_tracked
 def p_statement_list_empty(p):
     "statement_list : "
     p[0] = []
 
 
+@_tracked
 def p_statement_list_multi(p):
     "statement_list : statement_list statement"
     p[0] = p[1] + ([p[2]] if p[2] is not None else [])
 
 
+@_tracked
 def p_statement(p):
     """statement : expression_stmt
                   | compound_stmt
@@ -135,16 +191,19 @@ def p_statement(p):
     p[0] = p[1]
 
 
+@_tracked
 def p_expression_stmt(p):
     "expression_stmt : expression ';'"
     p[0] = ExprStmt(p[1])
 
 
+@_tracked
 def p_expression_stmt_empty(p):
     "expression_stmt : ';'"
     p[0] = None
 
 
+@_tracked
 def p_print_stmt(p):
     "print_stmt : PRINT '(' expression ')' ';'"
     p[0] = Print(p[3])
@@ -161,36 +220,43 @@ def _as_block(statement):
     return Block([statement])
 
 
+@_tracked
 def p_selection_stmt_if(p):
     "selection_stmt : IF '(' expression ')' statement %prec LOWER_THAN_ELSE"
     p[0] = If(p[3], _as_block(p[5]), None)
 
 
+@_tracked
 def p_selection_stmt_if_else(p):
     "selection_stmt : IF '(' expression ')' statement ELSE statement"
     p[0] = If(p[3], _as_block(p[5]), _as_block(p[7]))
 
 
+@_tracked
 def p_iteration_stmt(p):
     "iteration_stmt : WHILE '(' expression ')' statement"
     p[0] = While(p[3], _as_block(p[5]))
 
 
+@_tracked
 def p_return_stmt_empty(p):
     "return_stmt : RETURN ';'"
     p[0] = Return(None)
 
 
+@_tracked
 def p_return_stmt_value(p):
     "return_stmt : RETURN expression ';'"
     p[0] = Return(p[2])
 
 
+@_tracked
 def p_expression_assign(p):
     "expression : IDENTIFIER '=' expression"
     p[0] = Assign(p[1], p[3])
 
 
+@_tracked
 def p_expression_binop(p):
     """expression : expression EQ expression
                    | expression NEQ expression
@@ -206,46 +272,55 @@ def p_expression_binop(p):
     p[0] = BinOp(p[2], p[1], p[3])
 
 
+@_tracked
 def p_expression_unary_minus(p):
     "expression : '-' expression %prec UMINUS"
     p[0] = UnaryOp("-", p[2])
 
 
+@_tracked
 def p_expression_group(p):
     "expression : '(' expression ')'"
     p[0] = Group(p[2])
 
 
+@_tracked
 def p_expression_id(p):
     "expression : IDENTIFIER"
     p[0] = Id(p[1])
 
 
+@_tracked
 def p_expression_const(p):
     "expression : INTEGER_CONST"
     p[0] = Const(p[1])
 
 
+@_tracked
 def p_expression_call(p):
     "expression : IDENTIFIER '(' args ')'"
     p[0] = Call(p[1], p[3])
 
 
+@_tracked
 def p_args_empty(p):
     "args : "
     p[0] = []
 
 
+@_tracked
 def p_args_list(p):
     "args : arg_list"
     p[0] = p[1]
 
 
+@_tracked
 def p_arg_list_single(p):
     "arg_list : expression"
     p[0] = [p[1]]
 
 
+@_tracked
 def p_arg_list_multi(p):
     "arg_list : arg_list ',' expression"
     p[0] = p[1] + [p[3]]
@@ -266,4 +341,4 @@ _parser = yacc.yacc(write_tables=False, debug=False)
 def parse_source(source_code: str) -> Program:
     """Lexes and parses `source_code`, returning the AST root."""
     _lexer.lineno = 1
-    return _parser.parse(source_code, lexer=_lexer)
+    return _parser.parse(source_code, lexer=_lexer, tracking=True)
