@@ -3,7 +3,10 @@ AST to JSON serialization.
 """
 import dataclasses
 
+from constants import ArrayType
+
 from ast_nodes import (
+    Index, SizeOfType, SizeOfExpr,
     Assign, BinOp, Call, CompoundAssign, Const, FuncDecl, FuncProto, Group, Id,
     IncDec, LogicalOp, Param, StringConst, UnaryOp, VarDecl,
 )
@@ -19,18 +22,32 @@ def _node_label(node) -> str | None:
         return f"{qualifier}{node.type} {node.name}"
     if isinstance(node, (FuncDecl, FuncProto)):
         return f"{node.return_type} {node.name}"
-    if isinstance(node, (Id, Assign, Call)):
+    if isinstance(node, (Id, Call)):
         return node.name
+    if isinstance(node, SizeOfType):
+        return f"sizeof({node.type})"
+    if isinstance(node, (Index, SizeOfExpr, Assign)):
+        return None
     if isinstance(node, CompoundAssign):
-        return f"{node.name} {node.operator}="
+        return f"{node.operator}="
     if isinstance(node, IncDec):
         step = f"{node.operator}{node.operator}"
-        return f"{step}{node.name}" if node.is_prefix else f"{node.name}{step}"
+        return f"{step} (префіксний)" if node.is_prefix else f"{step} (постфіксний)"
     if isinstance(node, (BinOp, UnaryOp, LogicalOp)):
         return node.operator
     if isinstance(node, Group):
         return "( )"
     return None
+
+
+def _is_child_node(value) -> bool:
+    """
+    True for a value that is another AST node.
+
+    `ArrayType` is a dataclass too, but it describes a declared type rather
+    than a part of the tree, so it belongs in the node's label, not under it.
+    """
+    return dataclasses.is_dataclass(value) and not isinstance(value, ArrayType)
 
 
 def _child_nodes(node) -> list[tuple[str, object]]:
@@ -39,10 +56,8 @@ def _child_nodes(node) -> list[tuple[str, object]]:
     for field in dataclasses.fields(node):
         value = getattr(node, field.name)
         if isinstance(value, list):
-            for item in value:
-                if dataclasses.is_dataclass(item):
-                    children.append((field.name, item))
-        elif dataclasses.is_dataclass(value):
+            children.extend((field.name, item) for item in value if _is_child_node(item))
+        elif _is_child_node(value):
             children.append((field.name, value))
     return children
 

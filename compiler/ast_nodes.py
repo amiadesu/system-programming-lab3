@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from constants import CType
+from constants import CType, ValueType
 
 
 @dataclass
@@ -13,7 +13,7 @@ class Program:
 
 @dataclass
 class VarDecl:
-    type: CType
+    type: ValueType
     name: str
     value: object | None = None
     is_const: bool = False
@@ -36,7 +36,7 @@ class Group:
 
 @dataclass
 class Param:
-    type: CType
+    type: ValueType
     name: str
     is_const: bool = False
     line: int | None = None
@@ -92,7 +92,7 @@ class ExprStmt:
 
 @dataclass
 class Assign:
-    name: str
+    target: object
     value: object
     line: int | None = None
 
@@ -190,7 +190,7 @@ class Ternary:
 @dataclass
 class CompoundAssign:
     operator: str
-    name: str
+    target: object
     value: object
     line: int | None = None
 
@@ -198,8 +198,27 @@ class CompoundAssign:
 @dataclass
 class IncDec:
     operator: str
-    name: str
+    target: object
     is_prefix: bool
+    line: int | None = None
+
+
+@dataclass
+class Index:
+    base: object
+    index: object
+    line: int | None = None
+
+
+@dataclass
+class SizeOfType:
+    type: ValueType
+    line: int | None = None
+
+
+@dataclass
+class SizeOfExpr:
+    operand: object
     line: int | None = None
 
 
@@ -216,7 +235,13 @@ def expression_children(node) -> list:
     if isinstance(node, Ternary):
         return [node.condition, node.if_true, node.if_false]
     if isinstance(node, (Assign, CompoundAssign)):
-        return [node.value]
+        return [node.target, node.value]
+    if isinstance(node, IncDec):
+        return [node.target]
+    if isinstance(node, Index):
+        return [node.base, node.index]
+    if isinstance(node, SizeOfExpr):
+        return [node.operand]
     if isinstance(node, Call):
         return list(node.arguments)
     return []

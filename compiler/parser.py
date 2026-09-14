@@ -4,11 +4,12 @@ import ply.yacc as yacc
 
 from lexer import tokens, build_lexer
 from errors import SemanticError, SyntaxErrorAtLine
-from constants import COMPOUND_ASSIGN_OPERATORS, CType
+from constants import ArrayType, COMPOUND_ASSIGN_OPERATORS, CType
 from ast_nodes import (
     Group, Program, VarDecl, Param, FuncDecl, FuncProto, Block, If, While, For,
     DoWhile, Break, Continue, Return, Print, ExprStmt, Assign, CompoundAssign,
     IncDec, BinOp, LogicalOp, UnaryOp, Ternary, Call, Id, Const, StringConst,
+    Index, SizeOfType, SizeOfExpr,
 )
 
 # PLY normally infers the start symbol from the rule defined first, ordering
@@ -121,13 +122,19 @@ def p_var_declaration(p):
     # list of nodes rather than a single one.
     type_name, is_const = p[1]
     declarations = []
-    for name, value, line in p[2]:
+    for name, value, length, line in p[2]:
         _reject_void_object(type_name, name, line)
-        if is_const and value is None:
-            raise SemanticError(
-                f"Рядок {line}: константу '{name}' треба ініціалізувати при оголошенні"
-            )
-        declarations.append(VarDecl(type_name, name, value, is_const=is_const, line=line))
+        if length is not None:
+            if is_const:
+                raise SemanticError(f"Рядок {line}: масив '{name}' не може бути const")
+            declared: object = ArrayType(type_name, length)
+        else:
+            declared = type_name
+            if is_const and value is None:
+                raise SemanticError(
+                    f"Рядок {line}: константу '{name}' треба ініціалізувати при оголошенні"
+                )
+        declarations.append(VarDecl(declared, name, value, is_const=is_const, line=line)) # type: ignore
     p[0] = declarations
 
 
@@ -143,12 +150,20 @@ def p_init_declarator_list_multi(p):
 
 def p_init_declarator(p):
     "init_declarator : IDENTIFIER"
-    p[0] = (p[1], None, p.lineno(1))
+    p[0] = (p[1], None, None, p.lineno(1))
+
+
+def p_init_declarator_array(p):
+    "init_declarator : IDENTIFIER '[' INTEGER_CONST ']'"
+    # The size is a plain integer literal; no constant expressions.
+    if p[3] <= 0:
+        raise SemanticError(f"Рядок {p.lineno(1)}: розмір масиву '{p[1]}' має бути додатним")
+    p[0] = (p[1], None, p[3], p.lineno(1))
 
 
 def p_init_declarator_init(p):
     "init_declarator : IDENTIFIER '=' expression"
-    p[0] = (p[1], p[3], p.lineno(1))
+    p[0] = (p[1], p[3], None, p.lineno(1))
 
 
 def _reject_const_return_type(is_const: bool, name: str, line: int | None) -> None:
@@ -209,6 +224,18 @@ def p_param(p):
     type_name, is_const = p[1]
     _reject_void_object(type_name, p[2], p.lineno(2))
     p[0] = Param(type_name, p[2], is_const=is_const)
+
+
+@_tracked
+def p_param_array(p):
+    "param : declaration_specifier IDENTIFIER '[' ']'"
+    # An array parameter is passed by reference and carries no size, exactly as
+    # in C, where it decays to a pointer.
+    type_name, is_const = p[1]
+    _reject_void_object(type_name, p[2], p.lineno(2))
+    if is_const:
+        raise SemanticError(f"Рядок {p.lineno(2)}: масив '{p[2]}' не може бути const")
+    p[0] = Param(ArrayType(type_name, None), p[2])
 
 
 @_tracked
@@ -380,22 +407,34 @@ def p_return_stmt_value(p):
 
 @_tracked
 def p_expression_assign(p):
-    "expression : IDENTIFIER '=' expression"
+    "expression : lvalue '=' expression"
     p[0] = Assign(p[1], p[3])
 
 
 @_tracked
+def p_lvalue_name(p):
+    "lvalue : IDENTIFIER"
+    p[0] = Id(p[1])
+
+
+@_tracked
+def p_lvalue_index(p):
+    "lvalue : IDENTIFIER '[' expression ']'"
+    p[0] = Index(Id(p[1], line=p.lineno(1)), p[3])
+
+
+@_tracked
 def p_expression_compound_assign(p):
-    """expression : IDENTIFIER PLUSEQ expression
-                   | IDENTIFIER MINUSEQ expression
-                   | IDENTIFIER TIMESEQ expression
-                   | IDENTIFIER DIVEQ expression
-                   | IDENTIFIER MODEQ expression
-                   | IDENTIFIER ANDEQ expression
-                   | IDENTIFIER OREQ expression
-                   | IDENTIFIER XOREQ expression
-                   | IDENTIFIER SHLEQ expression
-                   | IDENTIFIER SHREQ expression"""
+    """expression : lvalue PLUSEQ expression
+                   | lvalue MINUSEQ expression
+                   | lvalue TIMESEQ expression
+                   | lvalue DIVEQ expression
+                   | lvalue MODEQ expression
+                   | lvalue ANDEQ expression
+                   | lvalue OREQ expression
+                   | lvalue XOREQ expression
+                   | lvalue SHLEQ expression
+                   | lvalue SHREQ expression"""
     p[0] = CompoundAssign(COMPOUND_ASSIGN_OPERATORS[p[2]], p[1], p[3])
 
 
@@ -414,15 +453,15 @@ def p_expression_logical(p):
 
 @_tracked
 def p_expression_prefix_incdec(p):
-    """expression : INC IDENTIFIER %prec UNARY
-                   | DEC IDENTIFIER %prec UNARY"""
+    """expression : INC lvalue %prec UNARY
+                   | DEC lvalue %prec UNARY"""
     p[0] = IncDec(p[1][0], p[2], is_prefix=True)
 
 
 @_tracked
 def p_expression_postfix_incdec(p):
-    """expression : IDENTIFIER INC
-                   | IDENTIFIER DEC"""
+    """expression : lvalue INC
+                   | lvalue DEC"""
     p[0] = IncDec(p[2][0], p[1], is_prefix=False)
 
 
@@ -459,6 +498,24 @@ def p_expression_unary(p):
 def p_expression_group(p):
     "expression : '(' expression ')'"
     p[0] = Group(p[2])
+
+
+@_tracked
+def p_expression_index(p):
+    "expression : IDENTIFIER '[' expression ']'"
+    p[0] = Index(Id(p[1], line=p.lineno(1)), p[3])
+
+
+@_tracked
+def p_expression_sizeof_type(p):
+    "expression : SIZEOF '(' type_specifier ')' %prec UNARY"
+    p[0] = SizeOfType(p[3])
+
+
+@_tracked
+def p_expression_sizeof_expression(p):
+    "expression : SIZEOF expression %prec UNARY"
+    p[0] = SizeOfExpr(p[2])
 
 
 @_tracked

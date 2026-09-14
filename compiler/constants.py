@@ -1,6 +1,7 @@
 """
 Constants shared by several compiler stages.
 """
+from dataclasses import dataclass
 from enum import StrEnum, IntEnum
 
 class CType(StrEnum):
@@ -11,6 +12,33 @@ class CType(StrEnum):
     # Not a real C type: the type type inference assigns to a string literal,
     # which the grammar only allows as the argument of `print`.
     TEXT = "text"
+
+
+@dataclass(frozen=True)
+class ArrayType:
+    """
+    An array of `element`, with `length` elements.
+
+    `length` is None for a parameter declared `int a[]`, where the size is not
+    part of the type - such an array can be indexed but not measured.
+    """
+
+    element: CType
+    length: int | None = None
+
+    def __str__(self) -> str:
+        return f"{self.element}[{self.length if self.length is not None else ''}]"
+
+
+# A declared type is either a plain C type or an array of one.
+ValueType = CType | ArrayType
+
+# Sizes `sizeof` reports, in bytes, matching a typical 64-bit C compiler so
+# that `sizeof(a) / sizeof(a[0])` gives the number of elements as it does in C.
+TYPE_SIZES = {
+    CType.INT: 4,
+    CType.DOUBLE: 8,
+}
     
 class Precedence(IntEnum):
     """
@@ -56,8 +84,25 @@ BINARY_LEVELS = {
 
 INDENT_UNIT = "    "
 
-PREAMBLE = (
-    "import math\n\n"
+#: Pieces of the generated module's preamble, each emitted only when the
+#: program actually needs it.
+MATH_IMPORT = "import math\n"
+
+#: C leaves an out-of-range subscript undefined, and Python would quietly wrap
+#: a negative index round to the end of the list. Neither is reproducible, so
+#: the generated code refuses the subscript, exactly as the interpreter does.
+ARRAY_HELPERS = (
+    "def _bound(sequence, index):\n"
+    "    if index < 0 or index >= len(sequence):\n"
+    "        raise IndexError(\n"
+    "            f\"індекс {index} поза межами масиву довжини {len(sequence)}\"\n"
+    "        )\n"
+    "    return index\n"
+    "\n"
+    "\n"
+    "def _store(sequence, index, value):\n"
+    "    sequence[_bound(sequence, index)] = value\n"
+    "    return sequence[index]\n"
 )
 
 
@@ -85,6 +130,7 @@ RESERVED_WORDS = {
     "continue": "CONTINUE",
     "return": "RETURN",
     "print": "PRINT",
+    "sizeof": "SIZEOF",
 }
 ESCAPE_SEQUENCES = {
     "n": "\n", "t": "\t", "r": "\r", "0": "\0",
@@ -116,4 +162,3 @@ INT32_MIN = -(2 ** 31)
 INT32_MAX = 2 ** 31 - 1
 
 ENTRY_POINT = "main"
-
