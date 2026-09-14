@@ -8,6 +8,10 @@ reserved_words = {
     "if": "IF",
     "else": "ELSE",
     "while": "WHILE",
+    "for": "FOR",
+    "do": "DO",
+    "break": "BREAK",
+    "continue": "CONTINUE",
     "return": "RETURN",
     "print": "PRINT",
 }
@@ -16,14 +20,38 @@ tokens = [
     "IDENTIFIER",
     "INTEGER_CONST",
     "EQ", "NEQ", "LEQ", "GEQ",
+    "AND", "OR",
+    "SHL", "SHR",
+    "INC", "DEC",
+    "PLUSEQ", "MINUSEQ", "TIMESEQ", "DIVEQ", "MODEQ",
+    "ANDEQ", "OREQ", "XOREQ", "SHLEQ", "SHREQ",
 ] + list(reserved_words.values())
 
-literals = ["+", "-", "*", "/", "%", "=", "<", ">", "(", ")", "{", "}", ";", ","]
+literals = [
+    "+", "-", "*", "/", "%", "=", "<", ">", "!", "~", "&", "|", "^", "?", ":",
+    "(", ")", "{", "}", ";", ",",
+]
 
+t_SHLEQ = r"<<="
+t_SHREQ = r">>="
 t_EQ = r"=="
 t_NEQ = r"!="
 t_LEQ = r"<="
 t_GEQ = r">="
+t_AND = r"&&"
+t_OR = r"\|\|"
+t_SHL = r"<<"
+t_SHR = r">>"
+t_INC = r"\+\+"
+t_DEC = r"--"
+t_PLUSEQ = r"\+="
+t_MINUSEQ = r"-="
+t_TIMESEQ = r"\*="
+t_DIVEQ = r"/="
+t_MODEQ = r"%="
+t_ANDEQ = r"&="
+t_OREQ = r"\|="
+t_XOREQ = r"\^="
 
 t_ignore = " \t\r\f\v"
 

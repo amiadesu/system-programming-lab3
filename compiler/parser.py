@@ -5,8 +5,9 @@ import ply.yacc as yacc
 from lexer import tokens, build_lexer
 from errors import SemanticError, SyntaxErrorAtLine
 from ast_nodes import (
-    Group, Program, VarDecl, Param, FuncDecl, Block, If, While, Return, Print,
-    ExprStmt, Assign, BinOp, UnaryOp, Call, Id, Const,
+    Group, Program, VarDecl, Param, FuncDecl, Block, If, While, For, DoWhile,
+    Break, Continue, Return, Print, ExprStmt, Assign, CompoundAssign, IncDec,
+    BinOp, LogicalOp, UnaryOp, Ternary, Call, Id, Const,
 )
 
 # PLY normally infers the start symbol from the rule defined first, ordering
@@ -15,15 +16,24 @@ from ast_nodes import (
 # symbol has to be named here.
 start = "program"
 
+# Lowest precedence first, mirroring the C operator table.
 precedence = (
     ("nonassoc", "LOWER_THAN_ELSE"),
     ("nonassoc", "ELSE"),
-    ("right", "="),
+    ("right", "=", "PLUSEQ", "MINUSEQ", "TIMESEQ", "DIVEQ", "MODEQ",
+     "ANDEQ", "OREQ", "XOREQ", "SHLEQ", "SHREQ"),
+    ("right", "?", ":"),
+    ("left", "OR"),
+    ("left", "AND"),
+    ("left", "|"),
+    ("left", "^"),
+    ("left", "&"),
     ("left", "EQ", "NEQ"),
     ("left", "<", ">", "LEQ", "GEQ"),
+    ("left", "SHL", "SHR"),
     ("left", "+", "-"),
     ("left", "*", "/", "%"),
-    ("right", "UMINUS"),
+    ("right", "UNARY"),
 )
 
 
@@ -73,13 +83,13 @@ def p_program(p):
 @_tracked
 def p_declaration_list_single(p):
     "declaration_list : declaration"
-    p[0] = [p[1]]
+    p[0] = _as_statements(p[1])
 
 
 @_tracked
 def p_declaration_list_multi(p):
     "declaration_list : declaration_list declaration"
-    p[0] = p[1] + [p[2]]
+    p[0] = p[1] + _as_statements(p[2])
 
 
 @_tracked
@@ -90,25 +100,46 @@ def p_declaration(p):
 
 
 @_tracked
+def p_type_specifier(p):
+    """type_specifier : INT
+                       | VOID"""
+    p[0] = p[1]
+
+
 def p_var_declaration(p):
-    """var_declaration : INT IDENTIFIER ';'
-                        | VOID IDENTIFIER ';'"""
-    _reject_void_object(p[1], p[2], p.lineno(2))
-    p[0] = VarDecl(p[1], p[2])
+    "var_declaration : type_specifier init_declarator_list ';'"
+    # One declaration may introduce several variables, so this rule produces a
+    # list of nodes rather than a single one.
+    declarations = []
+    for name, value, line in p[2]:
+        _reject_void_object(p[1], name, line)
+        declarations.append(VarDecl(p[1], name, value, line=line))
+    p[0] = declarations
 
 
-@_tracked
-def p_var_declaration_init(p):
-    """var_declaration : INT IDENTIFIER '=' expression ';'
-                       | VOID IDENTIFIER '=' expression ';'"""
-    _reject_void_object(p[1], p[2], p.lineno(2))
-    p[0] = VarDecl(p[1], p[2], p[4])
+def p_init_declarator_list_single(p):
+    "init_declarator_list : init_declarator"
+    p[0] = [p[1]]
+
+
+def p_init_declarator_list_multi(p):
+    "init_declarator_list : init_declarator_list ',' init_declarator"
+    p[0] = p[1] + [p[3]]
+
+
+def p_init_declarator(p):
+    "init_declarator : IDENTIFIER"
+    p[0] = (p[1], None, p.lineno(1))
+
+
+def p_init_declarator_init(p):
+    "init_declarator : IDENTIFIER '=' expression"
+    p[0] = (p[1], p[3], p.lineno(1))
 
 
 @_tracked
 def p_fun_declaration(p):
-    """fun_declaration : INT IDENTIFIER '(' params ')' compound_stmt
-                        | VOID IDENTIFIER '(' params ')' compound_stmt"""
+    "fun_declaration : type_specifier IDENTIFIER '(' params ')' compound_stmt"
     p[0] = FuncDecl(p[1], p[2], p[4], p[6])
 
 
@@ -144,28 +175,15 @@ def p_param_list_multi(p):
 
 @_tracked
 def p_param(p):
-    """param : INT IDENTIFIER
-              | VOID IDENTIFIER"""
+    "param : type_specifier IDENTIFIER"
     _reject_void_object(p[1], p[2], p.lineno(2))
     p[0] = Param(p[1], p[2])
 
 
 @_tracked
 def p_compound_stmt(p):
-    "compound_stmt : '{' local_declarations statement_list '}'"
-    p[0] = Block(p[2] + p[3])
-
-
-@_tracked
-def p_local_declarations_empty(p):
-    "local_declarations : "
-    p[0] = []
-
-
-@_tracked
-def p_local_declarations_multi(p):
-    "local_declarations : local_declarations var_declaration"
-    p[0] = p[1] + [p[2]]
+    "compound_stmt : '{' statement_list '}'"
+    p[0] = Block(p[2])
 
 
 @_tracked
@@ -177,15 +195,17 @@ def p_statement_list_empty(p):
 @_tracked
 def p_statement_list_multi(p):
     "statement_list : statement_list statement"
-    p[0] = p[1] + ([p[2]] if p[2] is not None else [])
+    p[0] = p[1] + _as_statements(p[2])
 
 
 @_tracked
 def p_statement(p):
     """statement : expression_stmt
+                  | var_declaration
                   | compound_stmt
                   | selection_stmt
                   | iteration_stmt
+                  | jump_stmt
                   | return_stmt
                   | print_stmt"""
     p[0] = p[1]
@@ -209,15 +229,27 @@ def p_print_stmt(p):
     p[0] = Print(p[3])
 
 
+def _as_statements(statement) -> list:
+    """
+    Normalises a `statement` into a list.
+
+    A single declaration may expand into several nodes (`int a = 1, b;`), and
+    an empty statement into none at all.
+    """
+    if statement is None:
+        return []
+    if isinstance(statement, list):
+        return statement
+    return [statement]
+
+
 def _as_block(statement):
     """Wraps a single statement into a Block for if/while bodies, unless
     it already is one (a literal `{ ... }`) — avoids a redundant nesting
     level in the AST."""
-    if statement is None:
-        return Block([])
     if isinstance(statement, Block):
         return statement
-    return Block([statement])
+    return Block(_as_statements(statement))
 
 
 @_tracked
@@ -233,9 +265,69 @@ def p_selection_stmt_if_else(p):
 
 
 @_tracked
-def p_iteration_stmt(p):
+def p_iteration_stmt_while(p):
     "iteration_stmt : WHILE '(' expression ')' statement"
     p[0] = While(p[3], _as_block(p[5]))
+
+
+@_tracked
+def p_iteration_stmt_do_while(p):
+    "iteration_stmt : DO statement WHILE '(' expression ')' ';'"
+    p[0] = DoWhile(_as_block(p[2]), p[5])
+
+
+@_tracked
+def p_iteration_stmt_for(p):
+    "iteration_stmt : FOR '(' for_init for_condition ';' for_step ')' statement"
+    p[0] = For(p[3], p[4], p[6], _as_block(p[8]))
+
+
+def p_for_init_declaration(p):
+    "for_init : var_declaration"
+    # `var_declaration` already consumes its own ';'.
+    p[0] = p[1]
+
+
+def p_for_init_expression(p):
+    "for_init : expression ';'"
+    p[0] = [ExprStmt(p[1], line=p.lineno(2) or None)]
+
+
+def p_for_init_empty(p):
+    "for_init : ';'"
+    p[0] = []
+
+
+def p_for_condition(p):
+    "for_condition : expression"
+    p[0] = p[1]
+
+
+def p_for_condition_empty(p):
+    "for_condition : "
+    p[0] = None
+
+
+def p_for_step(p):
+    "for_step : expression"
+    p[0] = p[1]
+
+
+def p_for_step_empty(p):
+    "for_step : "
+    p[0] = None
+
+
+@_tracked
+def p_jump_stmt_break(p):
+    "jump_stmt : BREAK ';'"
+    p[0] = Break()
+
+
+@_tracked
+def p_jump_stmt_continue(p):
+    "jump_stmt : CONTINUE ';'"
+    p[0] = Continue()
 
 
 @_tracked
@@ -257,6 +349,49 @@ def p_expression_assign(p):
 
 
 @_tracked
+def p_expression_compound_assign(p):
+    """expression : IDENTIFIER PLUSEQ expression
+                   | IDENTIFIER MINUSEQ expression
+                   | IDENTIFIER TIMESEQ expression
+                   | IDENTIFIER DIVEQ expression
+                   | IDENTIFIER MODEQ expression
+                   | IDENTIFIER ANDEQ expression
+                   | IDENTIFIER OREQ expression
+                   | IDENTIFIER XOREQ expression
+                   | IDENTIFIER SHLEQ expression
+                   | IDENTIFIER SHREQ expression"""
+    # p[2] is the matched text, so "+=" yields the plain operator "+".
+    p[0] = CompoundAssign(p[2][:-1], p[1], p[3])
+
+
+@_tracked
+def p_expression_ternary(p):
+    "expression : expression '?' expression ':' expression"
+    p[0] = Ternary(p[1], p[3], p[5])
+
+
+@_tracked
+def p_expression_logical(p):
+    """expression : expression AND expression
+                   | expression OR expression"""
+    p[0] = LogicalOp(p[2], p[1], p[3])
+
+
+@_tracked
+def p_expression_prefix_incdec(p):
+    """expression : INC IDENTIFIER %prec UNARY
+                   | DEC IDENTIFIER %prec UNARY"""
+    p[0] = IncDec(p[1][0], p[2], is_prefix=True)
+
+
+@_tracked
+def p_expression_postfix_incdec(p):
+    """expression : IDENTIFIER INC
+                   | IDENTIFIER DEC"""
+    p[0] = IncDec(p[2][0], p[1], is_prefix=False)
+
+
+@_tracked
 def p_expression_binop(p):
     """expression : expression EQ expression
                    | expression NEQ expression
@@ -268,14 +403,21 @@ def p_expression_binop(p):
                    | expression '-' expression
                    | expression '*' expression
                    | expression '/' expression
-                   | expression '%' expression"""
+                   | expression '%' expression
+                   | expression '&' expression
+                   | expression '|' expression
+                   | expression '^' expression
+                   | expression SHL expression
+                   | expression SHR expression"""
     p[0] = BinOp(p[2], p[1], p[3])
 
 
 @_tracked
-def p_expression_unary_minus(p):
-    "expression : '-' expression %prec UMINUS"
-    p[0] = UnaryOp("-", p[2])
+def p_expression_unary(p):
+    """expression : '-' expression %prec UNARY
+                   | '!' expression %prec UNARY
+                   | '~' expression %prec UNARY"""
+    p[0] = UnaryOp(p[1], p[2])
 
 
 @_tracked

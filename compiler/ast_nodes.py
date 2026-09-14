@@ -125,3 +125,61 @@ class Id:
 class Const:
     value: int
     line: int | None = None
+
+
+@dataclass
+class For:
+    init: list
+    condition: object | None
+    step: object | None
+    body: "Block"
+    line: int | None = None
+
+
+@dataclass
+class DoWhile:
+    body: "Block"
+    condition: object
+    line: int | None = None
+
+
+@dataclass
+class Break:
+    line: int | None = None
+
+
+@dataclass
+class Continue:
+    line: int | None = None
+
+
+@dataclass
+class LogicalOp:
+    operator: str
+    left: object
+    right: object
+    line: int | None = None
+
+
+@dataclass
+class Ternary:
+    condition: object
+    if_true: object
+    if_false: object
+    line: int | None = None
+
+
+@dataclass
+class CompoundAssign:
+    operator: str
+    name: str
+    value: object
+    line: int | None = None
+
+
+@dataclass
+class IncDec:
+    operator: str
+    name: str
+    is_prefix: bool
+    line: int | None = None
