@@ -6,6 +6,7 @@ the generated Python would otherwise quietly disagree:
 
 * a non-void function must return a value on every path, and a void one must
   not return a value at all;
+* `break` and `continue` may only appear inside a loop;
 * every call must name a declared function and pass the right number of
   arguments;
 * the result of a void function may not be used as a value;
@@ -20,8 +21,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ast_nodes import (
-    Assign, BinOp, Block, Call, Const, ExprStmt, FuncDecl, Group, Id, If,
-    Print, Program, Return, UnaryOp, VarDecl, While,
+    Assign, BinOp, Block, Break, Call, CompoundAssign, Const, Continue,
+    DoWhile, ExprStmt, For, FuncDecl, Group, Id, If, IncDec, LogicalOp, Print,
+    Program, Return, Ternary, UnaryOp, VarDecl, While,
 )
 from errors import SemanticError
 
@@ -84,7 +86,30 @@ def _always_returns(node) -> bool:
             and _always_returns(node.else_branch)
         )
     if isinstance(node, While):
-        return _is_constant_true(node.condition)
+        return _is_constant_true(node.condition) and not _contains_break(node.body)
+    if isinstance(node, For):
+        endless = node.condition is None or _is_constant_true(node.condition)
+        return endless and not _contains_break(node.body)
+    if isinstance(node, DoWhile):
+        # The body always runs once, so a body that returns is enough.
+        if _always_returns(node.body):
+            return True
+        return _is_constant_true(node.condition) and not _contains_break(node.body)
+    return False
+
+
+def _contains_break(node) -> bool:
+    """
+    True when `node` holds a `break` that belongs to the enclosing loop.
+    """
+    if isinstance(node, Break):
+        return True
+    if isinstance(node, Block):
+        return any(_contains_break(statement) for statement in node.statements)
+    if isinstance(node, If):
+        return _contains_break(node.then_branch) or (
+            node.else_branch is not None and _contains_break(node.else_branch)
+        )
     return False
 
 
@@ -94,18 +119,39 @@ def _is_constant_true(node) -> bool:
     return isinstance(node, Const) and node.value != 0
 
 
-def _check_statement(node, function: FuncDecl, functions: dict[str, FuncDecl], result: AnalysisResult) -> None:
+def _check_statement(
+    node,
+    function: FuncDecl,
+    functions: dict[str, FuncDecl],
+    result: AnalysisResult,
+    in_loop: bool = False,
+) -> None:
     if isinstance(node, Block):
         for statement in node.statements:
-            _check_statement(statement, function, functions, result)
+            _check_statement(statement, function, functions, result, in_loop)
     elif isinstance(node, If):
         _check_expression(node.condition, functions, result)
-        _check_statement(node.then_branch, function, functions, result)
+        _check_statement(node.then_branch, function, functions, result, in_loop)
         if node.else_branch is not None:
-            _check_statement(node.else_branch, function, functions, result)
+            _check_statement(node.else_branch, function, functions, result, in_loop)
     elif isinstance(node, While):
         _check_expression(node.condition, functions, result)
-        _check_statement(node.body, function, functions, result)
+        _check_statement(node.body, function, functions, result, in_loop=True)
+    elif isinstance(node, DoWhile):
+        _check_statement(node.body, function, functions, result, in_loop=True)
+        _check_expression(node.condition, functions, result)
+    elif isinstance(node, For):
+        for statement in node.init:
+            _check_statement(statement, function, functions, result, in_loop)
+        if node.condition is not None:
+            _check_expression(node.condition, functions, result)
+        if node.step is not None:
+            _check_expression(node.step, functions, result)
+        _check_statement(node.body, function, functions, result, in_loop=True)
+    elif isinstance(node, (Break, Continue)):
+        if not in_loop:
+            keyword_name = "break" if isinstance(node, Break) else "continue"
+            raise SemanticError(f"{_at(node)}'{keyword_name}' поза циклом")
     elif isinstance(node, VarDecl):
         if node.value is not None:
             _check_expression(node.value, functions, result)
@@ -157,7 +203,7 @@ def _check_expression(node, functions: dict[str, FuncDecl], result: AnalysisResu
     if isinstance(node, Call):
         _check_call(node, functions, expects_value=True)
 
-    if isinstance(node, Id):
+    if isinstance(node, (Id, IncDec)):
         return
 
     for child in _expression_children(node):
@@ -205,11 +251,13 @@ def _warn_if_outside_int32(value: int, result: AnalysisResult) -> None:
 def _expression_children(node) -> list:
     if isinstance(node, Group):
         return [node.expression]
-    if isinstance(node, BinOp):
+    if isinstance(node, (BinOp, LogicalOp)):
         return [node.left, node.right]
     if isinstance(node, UnaryOp):
         return [node.operand]
-    if isinstance(node, Assign):
+    if isinstance(node, Ternary):
+        return [node.condition, node.if_true, node.if_false]
+    if isinstance(node, (Assign, CompoundAssign)):
         return [node.value]
     if isinstance(node, Call):
         return list(node.arguments)

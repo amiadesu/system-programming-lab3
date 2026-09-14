@@ -5,8 +5,9 @@ import sys
 from functools import singledispatch
 
 from ast_nodes import (
-    Group, Program, VarDecl, FuncDecl, Block, If, While, Return, Print,
-    ExprStmt, Assign, BinOp, UnaryOp, Call, Id, Const,
+    Group, Program, VarDecl, FuncDecl, Block, If, While, For, DoWhile, Break,
+    Continue, Return, Print, ExprStmt, Assign, CompoundAssign, IncDec, BinOp,
+    LogicalOp, UnaryOp, Ternary, Call, Id, Const,
 )
 from errors import ExecutionLimitExceeded, RuntimeErrorInProgram, SemanticError
 
@@ -44,6 +45,17 @@ BINARY_OPERATORS = {
     ">": lambda a, b: int(a > b),
     "<=": lambda a, b: int(a <= b),
     ">=": lambda a, b: int(a >= b),
+    "&": lambda a, b: a & b,
+    "|": lambda a, b: a | b,
+    "^": lambda a, b: a ^ b,
+    "<<": lambda a, b: a << b,
+    ">>": lambda a, b: a >> b,
+}
+
+UNARY_OPERATORS = {
+    "-": lambda a: -a,
+    "!": lambda a: int(not a),
+    "~": lambda a: ~a,
 }
 
 
@@ -52,6 +64,14 @@ class _ReturnSignal(Exception):
 
     def __init__(self, value):
         self.value = value
+
+
+class _BreakSignal(Exception):
+    """Unwinds execution out of the innermost loop."""
+
+
+class _ContinueSignal(Exception):
+    """Unwinds execution to the next iteration of the innermost loop."""
 
 
 class Scope:
@@ -199,7 +219,56 @@ def _execute_if(node: If, scope: Scope, interpreter: Interpreter) -> None:
 def _execute_while(node: While, scope: Scope, interpreter: Interpreter) -> None:
     while _evaluate_expression(node.condition, scope, interpreter):
         interpreter.count_step()
-        _execute_statement(node.body, scope, interpreter)
+        try:
+            _execute_statement(node.body, scope, interpreter)
+        except _ContinueSignal:
+            continue
+        except _BreakSignal:
+            break
+
+
+@_execute_statement.register(DoWhile)
+def _execute_do_while(node: DoWhile, scope: Scope, interpreter: Interpreter) -> None:
+    while True:
+        interpreter.count_step()
+        try:
+            _execute_statement(node.body, scope, interpreter)
+        except _ContinueSignal:
+            pass  # `continue` in a do-while still reaches the condition
+        except _BreakSignal:
+            break
+        if not _evaluate_expression(node.condition, scope, interpreter):
+            break
+
+
+@_execute_statement.register(For)
+def _execute_for(node: For, scope: Scope, interpreter: Interpreter) -> None:
+    # The init part gets a scope of its own so `for (int i = ...)` does not leak
+    # `i` into the enclosing block, exactly as in C.
+    loop_scope = Scope(parent=scope)
+    for statement in node.init:
+        _execute_statement(statement, loop_scope, interpreter)
+
+    while node.condition is None or _evaluate_expression(node.condition, loop_scope, interpreter):
+        interpreter.count_step()
+        try:
+            _execute_statement(node.body, loop_scope, interpreter)
+        except _ContinueSignal:
+            pass  # `continue` skips the rest of the body but still runs the step
+        except _BreakSignal:
+            break
+        if node.step is not None:
+            _evaluate_expression(node.step, loop_scope, interpreter)
+
+
+@_execute_statement.register(Break)
+def _execute_break(node: Break, scope: Scope, interpreter: Interpreter) -> None:
+    raise _BreakSignal()
+
+
+@_execute_statement.register(Continue)
+def _execute_continue(node: Continue, scope: Scope, interpreter: Interpreter) -> None:
+    raise _ContinueSignal()
 
 
 @_execute_statement.register(Return)
@@ -246,9 +315,51 @@ def _evaluate_binop(node: BinOp, scope: Scope, interpreter: Interpreter) -> int:
 @_evaluate_expression.register(UnaryOp)
 def _evaluate_unary(node: UnaryOp, scope: Scope, interpreter: Interpreter) -> int:
     value = _evaluate_expression(node.operand, scope, interpreter)
-    if node.operator == "-":
-        return -value
-    raise TypeError(f"Unknown unary operator {node.operator!r}")
+    return UNARY_OPERATORS[node.operator](value)
+
+
+@_evaluate_expression.register(LogicalOp)
+def _evaluate_logical(node: LogicalOp, scope: Scope, interpreter: Interpreter) -> int:
+    interpreter.count_step()
+    left = _evaluate_expression(node.left, scope, interpreter)
+
+    # Short-circuit: the right operand is only evaluated when it can still change
+    # the answer, so its side effects follow C.
+    if node.operator == "&&":
+        if not left:
+            return 0
+    elif node.operator == "||":
+        if left:
+            return 1
+    else:
+        raise TypeError(f"Unknown logical operator {node.operator!r}")
+
+    return int(bool(_evaluate_expression(node.right, scope, interpreter)))
+
+
+@_evaluate_expression.register(Ternary)
+def _evaluate_ternary(node: Ternary, scope: Scope, interpreter: Interpreter) -> int:
+    interpreter.count_step()
+    if _evaluate_expression(node.condition, scope, interpreter):
+        return _evaluate_expression(node.if_true, scope, interpreter)
+    return _evaluate_expression(node.if_false, scope, interpreter)
+
+
+@_evaluate_expression.register(CompoundAssign)
+def _evaluate_compound_assign(node: CompoundAssign, scope: Scope, interpreter: Interpreter) -> int:
+    current = scope.get(node.name)
+    operand = _evaluate_expression(node.value, scope, interpreter)
+    value = BINARY_OPERATORS[node.operator](current, operand)
+    scope.set(node.name, value)
+    return value
+
+
+@_evaluate_expression.register(IncDec)
+def _evaluate_inc_dec(node: IncDec, scope: Scope, interpreter: Interpreter) -> int:
+    previous = scope.get(node.name)
+    value = previous + 1 if node.operator == "+" else previous - 1
+    scope.set(node.name, value)
+    return value if node.is_prefix else previous
 
 
 @_evaluate_expression.register(Call)

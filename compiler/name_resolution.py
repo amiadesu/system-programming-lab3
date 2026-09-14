@@ -22,8 +22,9 @@ import keyword
 from dataclasses import dataclass, field
 
 from ast_nodes import (
-    Assign, BinOp, Block, Call, FuncDecl, Group, Id, If, Print,
-    Program, Return, UnaryOp, VarDecl, While, ExprStmt,
+    Assign, BinOp, Block, Break, Call, CompoundAssign, Continue, DoWhile,
+    ExprStmt, For, FuncDecl, Group, Id, If, IncDec, LogicalOp, Print, Program,
+    Return, Ternary, UnaryOp, VarDecl, While,
 )
 from errors import SemanticError
 
@@ -251,7 +252,7 @@ def _bind_global_initializer(
             f"{_at(node)}ініціалізатор глобальної змінної не може викликати "
             f"функції (виклик '{node.name}')"
         )
-    if isinstance(node, (Id, Assign)):
+    if isinstance(node, (Id, Assign, CompoundAssign, IncDec)):
         if node.name not in global_names:
             raise SemanticError(
                 f"{_at(node)}ініціалізатор глобальної змінної посилається на "
@@ -265,11 +266,13 @@ def _bind_global_initializer(
 def _expression_children(node) -> list:
     if isinstance(node, Group):
         return [node.expression]
-    if isinstance(node, BinOp):
+    if isinstance(node, (BinOp, LogicalOp)):
         return [node.left, node.right]
     if isinstance(node, UnaryOp):
         return [node.operand]
-    if isinstance(node, Assign):
+    if isinstance(node, Ternary):
+        return [node.condition, node.if_true, node.if_false]
+    if isinstance(node, (Assign, CompoundAssign)):
         return [node.value]
     if isinstance(node, Call):
         return list(node.arguments)
@@ -300,6 +303,23 @@ def _bind_statement(node, binder: _Binder) -> None:
     elif isinstance(node, While):
         _bind_expression(node.condition, binder)
         _bind_block(node.body, binder)
+    elif isinstance(node, DoWhile):
+        _bind_block(node.body, binder)
+        _bind_expression(node.condition, binder)
+    elif isinstance(node, For):
+        # `for (int i = ...)` declares `i` in a scope around the loop, not in
+        # the enclosing block.
+        binder.push()
+        for statement in node.init:
+            _bind_statement(statement, binder)
+        if node.condition is not None:
+            _bind_expression(node.condition, binder)
+        _bind_block(node.body, binder)
+        if node.step is not None:
+            _bind_expression(node.step, binder)
+        binder.pop()
+    elif isinstance(node, (Break, Continue)):
+        pass
     elif isinstance(node, Return):
         if node.value is not None:
             _bind_expression(node.value, binder)
@@ -312,8 +332,11 @@ def _bind_statement(node, binder: _Binder) -> None:
 
 
 def _bind_expression(node, binder: _Binder) -> None:
-    if isinstance(node, Assign):
+    if isinstance(node, (Assign, CompoundAssign)):
         _bind_expression(node.value, binder)
+        binder.use(node, node.name, is_assignment=True)
+        return
+    if isinstance(node, IncDec):
         binder.use(node, node.name, is_assignment=True)
         return
     if isinstance(node, Id):
