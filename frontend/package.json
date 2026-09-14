@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.2",
+    "@codemirror/lang-python": "^6.2.1",
     "@uiw/react-codemirror": "^4.23.6",
     "d3": "^7.9.0",
     "react": "^18.3.1",
